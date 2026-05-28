@@ -235,10 +235,10 @@ Connect your local tools and filesystem to ClaraVerse via the Clara Companion CL
 claraverse companion
 
 # Login (choose default localhost:3000 or enter your server URL)
-clara_companion login
+clara-companion login
 
 # Start the bridge
-clara_companion
+clara-companion
 ```
 
 Or install manually from [GitHub Releases](https://github.com/claraverse-space/ClaraVerse/releases).
