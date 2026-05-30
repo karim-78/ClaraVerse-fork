@@ -937,6 +937,14 @@ func (r *DaemonRunner) executeTool(ctx context.Context, toolName string, argsJSO
 		}
 	}
 
+	// spawn_subagent: same injection trick chat_service uses. Daemons can
+	// now fan out to a focused subagent for noisy work whose intermediate
+	// steps the daemon doesn't need to keep in its context. Without this
+	// injection the tool surfaces a "not wired up" error to the model.
+	if toolName == "spawn_subagent" && r.chatService != nil {
+		args[tools.SubagentRunnerKey] = tools.SubagentRunner(r.chatService)
+	}
+
 	result, err := r.toolRegistry.Execute(toolName, args)
 	if err != nil {
 		log.Printf("[DAEMON %s] Tool %s failed: %v", r.instance.RoleLabel, toolName, err)

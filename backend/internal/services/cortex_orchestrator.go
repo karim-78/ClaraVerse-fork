@@ -545,6 +545,7 @@ func (s *CortexService) handleDaemonMode(
 		DaemonStore:     s.daemonPool,
 		ContextBuilder:  s.contextBuilder,
 		ToolSelector:    s.toolSelector,
+		ArtifactStore:   s.artifactStore, // single-daemon path also needs this so produce/list/read_artifact work
 		OriginalMessage:    message,
 		ProjectInstruction: projectInstruction,
 		SkillIDs:           skillIDs,
@@ -1668,6 +1669,7 @@ Instructions: Address the original request completely. Use different tools or ap
 		DaemonStore:        s.daemonPool,
 		ContextBuilder:     s.contextBuilder,
 		ToolSelector:       s.toolSelector,
+		ArtifactStore:      s.artifactStore, // retry path also needs this so produce/list/read_artifact work
 		OriginalMessage:    enhancedMessage,
 		ProjectInstruction: retryProjectInstruction,
 	})
