@@ -74,7 +74,11 @@ func (s *CortexService) HandleUserMessage(
 	// 1. Ensure session exists
 	session, err := s.sessionStore.GetOrCreate(execCtx, userID)
 	if err != nil {
-		s.publish(userID, "error", map[string]string{"message": "failed to get session"})
+		s.publishError(userID,
+			"session_unavailable",
+			"Couldn't load your session — try refreshing.",
+			"If this persists, check the admin trace viewer or contact support.",
+			err)
 		return
 	}
 
@@ -425,7 +429,11 @@ func (s *CortexService) handleDaemonMode(
 	skillIDs []primitive.ObjectID,
 ) {
 	if len(classification.Daemons) == 0 {
-		s.publish(userID, "error", map[string]string{"message": "no daemon plan in classification"})
+		s.publishError(userID,
+			"classification_empty",
+			"I couldn't break that request down into a plan — try rephrasing more concretely.",
+			"Example: \"research X and summarize\" works better than \"do X\".",
+			nil)
 		return
 	}
 
@@ -440,7 +448,11 @@ func (s *CortexService) handleDaemonMode(
 
 	if !s.acquireDaemonSlot(userID) {
 		_ = s.taskStore.SetError(ctx, userID, task.ID, "maximum concurrent daemons reached")
-		s.publish(userID, "error", map[string]string{"message": "maximum concurrent daemons reached (5)"})
+		s.publishError(userID,
+			"daemon_capacity",
+			"You're already running 5 daemons. Wait for one to finish before starting another.",
+			"Check the active tasks panel or cancel a running one to free a slot.",
+			nil)
 		return
 	}
 
@@ -564,7 +576,11 @@ func (s *CortexService) handleMultiDaemonMode(
 	skillIDs []primitive.ObjectID,
 ) {
 	if len(classification.Daemons) == 0 {
-		s.publish(userID, "error", map[string]string{"message": "no daemon plans"})
+		s.publishError(userID,
+			"classification_empty",
+			"I couldn't decompose that into multiple agents — try a simpler single-step request, or be more specific.",
+			"If you wanted a single agent, you can pick one directly from the daemon template list.",
+			nil)
 		return
 	}
 
@@ -736,9 +752,11 @@ func (s *CortexService) orchestrateMultiDaemon(
 		depsMet := len(plan.DependsOn) == 0 || allDepsMet(plan.DependsOn, completed)
 		if depsMet {
 			if !s.acquireDaemonSlot(userID) {
-				s.publish(userID, "error", map[string]string{
-					"message": fmt.Sprintf("cannot deploy daemon %s: at capacity", plan.RoleLabel),
-				})
+				s.publishError(userID,
+					"daemon_capacity",
+					fmt.Sprintf("Can't launch the %s daemon — you're at the 5-concurrent cap.", plan.RoleLabel),
+					"Wait for one of your active daemons to finish, then this one will pick up automatically.",
+					nil)
 				continue
 			}
 
@@ -1762,7 +1780,11 @@ func (s *CortexService) handleRetryDispatch(
 	// Ensure session exists
 	session, err := s.sessionStore.GetOrCreate(execCtx, userID)
 	if err != nil {
-		s.publish(userID, "error", map[string]string{"message": "failed to get session for retry"})
+		s.publishError(userID,
+			"session_unavailable",
+			"Couldn't restore your session to retry — try refreshing and retrying again.",
+			"If this keeps happening the trace viewer will have details.",
+			err)
 		return
 	}
 	if sessionID == primitive.NilObjectID {

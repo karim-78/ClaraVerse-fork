@@ -1467,6 +1467,13 @@ func main() {
 			// Admin status
 			adminRoutes.Get("/me", adminHandler.GetAdminStatus)
 
+			// Backup / restore — gzipped JSON snapshot of the full Mongo DB.
+			// Restore is upsert-only (non-destructive). Admin-gated by the
+			// route group middleware above.
+			backupHandler := handlers.NewBackupAdminHandler(mongoDB)
+			adminRoutes.Get("/backup", backupHandler.Backup)
+			adminRoutes.Post("/restore", backupHandler.Restore)
+
 			// User management
 			adminRoutes.Get("/users/:userID", adminHandler.GetUserDetails)
 			adminRoutes.Post("/users/:userID/overrides", adminHandler.SetLimitOverrides)

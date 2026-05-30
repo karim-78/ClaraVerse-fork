@@ -179,6 +179,37 @@ func (s *CortexService) publish(userID, eventType string, data interface{}) {
 	s.eventBus.Publish(userID, NexusEvent{Type: eventType, Data: data})
 }
 
+// publishError emits a structured user-facing error.
+//
+// Why structured: the bare `publish("error", {"message": "..."})` pattern
+// shipped a single string the frontend had nowhere to disambiguate. Code
+// lets the UI choose how to render (toast vs panel vs inline). Hint
+// guides the user on what they can actually do about it. TraceID points
+// support at the OTel waterfall in the admin trace viewer for the same
+// session.
+//
+// The internalErr is logged but never reaches the user — it can contain
+// stack traces, internal IDs, or sensitive details. The user-facing
+// message must be self-contained.
+//
+// Callers should pick a small, stable set of codes (e.g.
+// "session_unavailable", "daemon_capacity", "classification_failed") so
+// the frontend can localize / route them consistently.
+func (s *CortexService) publishError(userID, code, userMessage, hint string, internalErr error) {
+	data := map[string]interface{}{
+		"code":     code,
+		"message":  userMessage,
+		"hint":     hint,
+		"trace_id": "", // populated when ctx-bound trace is available
+	}
+	if internalErr != nil {
+		log.Printf("[USER-ERR] user=%s code=%s msg=%q internal=%v", userID, code, userMessage, internalErr)
+	} else {
+		log.Printf("[USER-ERR] user=%s code=%s msg=%q", userID, code, userMessage)
+	}
+	s.publish(userID, "error", data)
+}
+
 // acquireDaemonSlot acquires a daemon slot for the user, returns false if at capacity
 func (s *CortexService) acquireDaemonSlot(userID string) bool {
 	sem := s.getOrCreateSemaphore(userID)
