@@ -79,6 +79,9 @@ interface NexusState {
   setBridgeConnected: (connected: boolean) => void;
   setSessionState: (data: Record<string, unknown>) => void;
   setSession: (session: NexusSession) => void;
+  // Replace the task list with an authoritative server snapshot (from
+  // nexusService.listTasks). Honors locally-deleted IDs.
+  setTasks: (tasks: NexusTask[]) => void;
 
   addDaemon: (daemon: Partial<Daemon>) => void;
   updateDaemon: (update: Record<string, unknown>) => void;
@@ -207,6 +210,21 @@ export const useNexusStore = create<NexusState>()(
         }),
 
       addTask: task => set(state => ({ tasks: [task, ...state.tasks] })),
+
+      // Authoritative server-side task list (from REST nexusService.listTasks).
+      // Used on Nexus page mount / reconnect to refresh from the source of truth
+      // instead of relying on the WS session_state message (which can lag if
+      // events arrived while the WS was disconnected). Respects locally-deleted
+      // task IDs so a delete that hasn't propagated to the server yet doesn't
+      // flicker the task back into view.
+      setTasks: serverTasks =>
+        set(state => {
+          const filtered =
+            state._deletedTaskIds.size > 0
+              ? serverTasks.filter(t => !state._deletedTaskIds.has(t.id))
+              : serverTasks;
+          return { tasks: filtered };
+        }),
 
       updateTask: task =>
         set(state => {
