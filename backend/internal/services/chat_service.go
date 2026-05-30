@@ -3473,16 +3473,25 @@ func intFromJSON(v interface{}) int {
 }
 
 // providerSupportsPromptCaching reports whether the provider behind baseURL
-// honors Anthropic-style cache_control markers on chat-completions requests.
-// Probed live against Bedrock's ap-south-1 OpenAI shim on 2026-05-30: the
-// shim accepts cache_control on the top-level system message and reports
-// cached_tokens in usage.prompt_tokens_details. Anthropic's native API uses
-// the same field shape. Other providers ignore the field silently.
+// honors message-level cache_control markers on chat-completions requests.
+//
+// Bedrock removed from the list as of the Nexus 400-loop incident: their
+// /openai/v1 shim rejects message-level cache_control with a JSON parse
+// error ("Unterminated string starting at: line 1 column 11") which
+// triggers infinite 3-retry loops on every daemon. Bedrock auto-caches
+// prompts >1024 tokens server-side without needing this marker, so we
+// lose nothing by dropping it.
+//
+// Anthropic's native /v1/messages API does honor cache_control, but
+// inside content BLOCKS (not on the message itself). The marker we
+// shipped before was wrong even for Anthropic — we'd need to restructure
+// content from string to [{type:"text", text:..., cache_control:...}].
+// Until that refactor lands, returning false everywhere is the safe
+// behaviour; we forfeit some explicit caching wins on Anthropic native
+// in exchange for never crashing a daemon mid-task.
 func providerSupportsPromptCaching(baseURL string) bool {
-	u := strings.ToLower(baseURL)
-	return strings.Contains(u, "bedrock-runtime") ||
-		strings.Contains(u, "bedrock-mantle") ||
-		strings.Contains(u, "api.anthropic.com")
+	_ = baseURL
+	return false
 }
 
 // applyPromptCaching annotates the system message with cache_control:ephemeral

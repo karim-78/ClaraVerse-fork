@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -244,6 +245,13 @@ func (s *EmbeddingService) embedOpenAICompatible(ctx context.Context, baseURL, a
 // CosineSimilarity returns the cosine similarity between two equal-length
 // vectors. Returns 0 on mismatched / empty inputs. Exported because the
 // memory storage service uses it to rank candidates.
+//
+// Uses math.Sqrt for full IEEE 754 precision. An earlier version of this
+// function used a hand-rolled 4-iteration Newton's method to "avoid the
+// math import" — for vectors of even modest magnitude that converges to
+// ~2-3 significant digits, which silently skewed every retrieval ranking
+// (identical vectors scored ~0.989 instead of 1.0; parallel-but-scaled
+// vectors scored ~0.97). Caught by memory_vector_test.go.
 func CosineSimilarity(a, b []float32) float64 {
 	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
 		return 0
@@ -258,19 +266,5 @@ func CosineSimilarity(a, b []float32) float64 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	return dot / (sqrt(na) * sqrt(nb))
-}
-
-// sqrt avoids pulling math just for this one call — small win on import
-// surface area for code that's hot per call.
-func sqrt(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	// Newton's method, 4 iters is enough for our precision needs
-	z := x
-	for i := 0; i < 4; i++ {
-		z = (z + x/z) / 2
-	}
-	return z
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
