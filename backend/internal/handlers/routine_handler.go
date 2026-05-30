@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// RoutineHandler handles Clara's Claw routine endpoints
+// RoutineHandler handles Dobby's Claw routine endpoints
 type RoutineHandler struct {
 	routineService *services.RoutineService
 	channelService *services.ChannelService
@@ -246,7 +246,7 @@ func (h *RoutineHandler) TriggerRoutine(c *fiber.Ctx) error {
 	})
 }
 
-// GetClawStatus returns the combined Clara's Claw status
+// GetClawStatus returns the combined Dobby's Claw status
 func (h *RoutineHandler) GetClawStatus(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 

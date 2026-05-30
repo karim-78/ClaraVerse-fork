@@ -3,12 +3,49 @@ package handlers
 import (
 	"claraverse/internal/models"
 	"claraverse/internal/services"
+	"context"
 	"log"
+	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
+
+// killSandboxForConversation tells the e2b-service to immediately tear down
+// the persistent sandbox associated with this conversation. Called when the
+// user deletes a chat — avoids letting the sandbox sit around burning E2B
+// sandbox-hours until the 15-min idle eviction fires. Fire-and-forget;
+// failures are logged but never block the chat delete response.
+func killSandboxForConversation(conversationID string) {
+	if conversationID == "" {
+		return
+	}
+	base := os.Getenv("E2B_SERVICE_URL")
+	if base == "" {
+		base = "http://e2b-service:8001"
+	}
+	endpoint := strings.TrimRight(base, "/") + "/sandboxes/" + url.PathEscape(conversationID)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "DELETE", endpoint, nil)
+	if err != nil {
+		log.Printf("⚠️ [SANDBOX-CLEANUP] build request failed: %v", err)
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("⚠️ [SANDBOX-CLEANUP] DELETE %s failed: %v", endpoint, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("🧹 [SANDBOX-CLEANUP] killed sandbox for conv %s", conversationID)
+	}
+}
 
 // ChatSyncHandler handles HTTP requests for chat sync operations
 type ChatSyncHandler struct {
@@ -124,6 +161,31 @@ func (h *ChatSyncHandler) List(c *fiber.Ctx) error {
 	return c.JSON(chats)
 }
 
+// Search performs a server-side decrypt-and-scan full-text search over the
+// user's chats. Encryption rules out an index — we trade O(n) decrypt-time
+// CPU for keeping the privacy guarantee.
+// GET /api/chats/search?q=foo&limit=25
+func (h *ChatSyncHandler) Search(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Authentication required",
+		})
+	}
+
+	query := c.Query("q", "")
+	limit, _ := strconv.Atoi(c.Query("limit", "25"))
+
+	result, err := h.service.SearchChats(c.Context(), userID, query, limit)
+	if err != nil {
+		log.Printf("❌ Chat search failed for user %s: %v", userID, err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Search failed",
+		})
+	}
+	return c.JSON(result)
+}
+
 // Update performs a partial update on a chat
 // PUT /api/chats/:id
 func (h *ChatSyncHandler) Update(c *fiber.Ctx) error {
@@ -183,6 +245,13 @@ func (h *ChatSyncHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	err := h.service.DeleteChat(c.Context(), userID, chatID)
+	if err == nil {
+		// Best-effort: kill the conversation's persistent E2B sandbox
+		// immediately rather than waiting for the 15-min idle eviction.
+		// Direct cost saving — an abandoned sandbox burns E2B sandbox-hours
+		// until the eviction ticker runs.
+		go killSandboxForConversation(chatID)
+	}
 	if err != nil {
 		if err.Error() == "chat not found" {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{

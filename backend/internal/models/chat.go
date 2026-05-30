@@ -176,3 +176,24 @@ type ChatListResponse struct {
 	PageSize   int            `json:"page_size"`
 	HasMore    bool           `json:"has_more"`
 }
+
+// ChatSearchHit is a single full-text search result with enough context for
+// the UI to render a preview chip and (eventually) jump to the exact message.
+type ChatSearchHit struct {
+	ChatID       string    `json:"chat_id"`
+	Title        string    `json:"title"`
+	IsStarred    bool      `json:"is_starred"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Snippet      string    `json:"snippet"`
+	MatchField   string    `json:"match_field"`              // "title" | "message"
+	MessageID    string    `json:"message_id,omitempty"`
+	MessageRole  string    `json:"message_role,omitempty"`
+	MessageIndex int       `json:"message_index,omitempty"`
+}
+
+// ChatSearchResponse is what /api/chats/search returns.
+type ChatSearchResponse struct {
+	Query string          `json:"query"`
+	Hits  []ChatSearchHit `json:"hits"`
+	Total int             `json:"total"`
+}

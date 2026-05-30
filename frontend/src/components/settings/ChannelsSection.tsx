@@ -57,7 +57,7 @@ const CHANNEL_CONFIGS: ChannelConfig[] = [
     name: 'Telegram',
     icon: <TelegramIcon size={24} />,
     description:
-      'Connect your Telegram bot to chat with ClaraVerse AI directly from Telegram. Messages are processed through a secure webhook.',
+      'Connect your Telegram bot to chat with DobbyAI directly from Telegram. Messages are processed through a secure webhook.',
     docsUrl: 'https://core.telegram.org/bots#how-do-i-create-a-bot',
     platform: 'telegram',
     fields: [
@@ -337,7 +337,7 @@ export const ChannelsSection = () => {
       <div className="channels-header">
         <h2 className="channels-title">Communication Channels</h2>
         <p className="channels-description">
-          Connect external messaging platforms to chat with ClaraVerse AI. Each channel creates a
+          Connect external messaging platforms to chat with DobbyAI. Each channel creates a
           secure webhook endpoint for real-time communication.
         </p>
       </div>

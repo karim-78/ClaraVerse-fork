@@ -1,14 +1,17 @@
 package handlers
 
 import (
+	"bytes"
 	"claraverse/internal/filecache"
 	"claraverse/internal/models"
 	"claraverse/internal/services"
 	"claraverse/internal/utils"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +21,50 @@ import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/google/uuid"
 )
+
+// pushFileToSandbox uploads a file into the conversation's persistent E2B
+// sandbox at /data/<filename>. Best-effort; callers treat false/error as a
+// graceful degradation (preview still injected, just no sandbox path).
+//
+// We keep this lightweight (no dedicated client struct) because the e2b
+// service URL never changes at runtime and the call is fire-and-forget per
+// upload. The chat path is the only caller.
+func pushFileToSandbox(conversationID, filename string, content []byte) (bool, error) {
+	if conversationID == "" {
+		return false, fmt.Errorf("no conversation id")
+	}
+	if len(content) == 0 {
+		return false, fmt.Errorf("empty content")
+	}
+	baseURL := os.Getenv("E2B_SERVICE_URL")
+	if baseURL == "" {
+		baseURL = "http://e2b-service:8001"
+	}
+	body, err := json.Marshal(map[string]interface{}{
+		"conversation_id": conversationID,
+		"target_path":     "/data/" + filename,
+		"content_b64":     base64.StdEncoding.EncodeToString(content),
+	})
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/files/push", bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("e2b push HTTP %d", resp.StatusCode)
+	}
+	return true, nil
+}
 
 // PromptResponse stores a user's response to an interactive prompt
 type PromptResponse struct {
@@ -231,10 +278,17 @@ func (h *WebSocketHandler) handleChatMessage(userConn *models.UserConnection, cl
 		log.Printf("🔒 Tools disabled for %s (agent builder mode)", userConn.ConnID)
 	}
 
-	// Update selected tools filter (e.g., from Clara's Claw tool picker)
+	// Update selected tools filter (e.g., from Dobby's Claw tool picker)
 	userConn.SelectedTools = clientMsg.SelectedTools
 	if len(userConn.SelectedTools) > 0 {
 		log.Printf("🎯 Tool filter active for %s: %v", userConn.ConnID, userConn.SelectedTools)
+	}
+
+	// Propagate the per-turn reasoning_effort hint to the connection so
+	// chat_service can attach it to the LLM request body.
+	userConn.ReasoningEffort = clientMsg.ReasoningEffort
+	if userConn.ReasoningEffort != "" {
+		log.Printf("🧠 Reasoning effort: %s (user: %s)", userConn.ReasoningEffort, userConn.ConnID)
 	}
 
 	// Priority-based history handling: prefer backend cache, fall back to client history
@@ -400,10 +454,29 @@ func (h *WebSocketHandler) handleChatMessage(userConn *models.UserConnection, cl
 				}
 				preview := strings.Join(lines[:previewLines], "\n")
 
+				// Push the file into the conversation's persistent E2B
+				// sandbox at /data/<filename>. The sandbox is pooled by
+				// conversation_id, so subsequent `run_python` calls can
+				// open the file directly without the model first having
+				// to reach into the filecache. Best-effort — if the push
+				// fails (sandbox down, e2b unavailable) we just don't
+				// advertise the sandbox path and the user can still ask
+				// the model to read the inline preview.
+				sandboxPath := ""
+				if pushed, err := pushFileToSandbox(userConn.ConversationID, att.Filename, fileContent); err == nil && pushed {
+					sandboxPath = "/data/" + att.Filename
+					log.Printf("📤 [DATA] Pushed %s → %s (sandbox conv=%s)", att.Filename, sandboxPath, userConn.ConversationID)
+				} else if err != nil {
+					log.Printf("⚠️  [DATA] Sandbox push for %s failed (continuing without): %v", att.Filename, err)
+				}
+
 				// Build data file context
 				dataFileContext.WriteString(fmt.Sprintf("\n\n[Data File: %s]\n", att.Filename))
 				dataFileContext.WriteString(fmt.Sprintf("File ID: %s\n", att.FileID))
 				dataFileContext.WriteString(fmt.Sprintf("Type: %s | Size: %d bytes\n", att.MimeType, cachedFile.Size))
+				if sandboxPath != "" {
+					dataFileContext.WriteString(fmt.Sprintf("Sandbox path: %s (available in run_python; `pd.read_csv('%s')` will work)\n", sandboxPath, sandboxPath))
+				}
 				dataFileContext.WriteString(fmt.Sprintf("\nPreview (first %d lines):\n", previewLines))
 				dataFileContext.WriteString("```\n")
 				dataFileContext.WriteString(preview)

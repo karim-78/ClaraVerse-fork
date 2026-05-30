@@ -102,7 +102,7 @@ func (db *DB) Initialize() error {
 func (db *DB) applyInitialSchemaIfNeeded() error {
 	dbName := os.Getenv("MYSQL_DATABASE")
 	if dbName == "" {
-		dbName = "claraverse"
+		dbName = "dobbyai"
 	}
 
 	// Check if schema_version table exists (indicates schema was already applied)
@@ -163,7 +163,7 @@ func (db *DB) findMigrationFile(filename string) string {
 func (db *DB) runMigrations() error {
 	dbName := os.Getenv("MYSQL_DATABASE")
 	if dbName == "" {
-		dbName = "claraverse" // default
+		dbName = "dobbyai" // default
 	}
 
 	// Helper function to check if column exists

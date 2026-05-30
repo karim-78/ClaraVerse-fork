@@ -156,7 +156,7 @@ export function AgentSidebar({
       >
         {isExpanded && (
           <div className="flex items-center gap-2 flex-1 overflow-hidden">
-            <img src={faviconIcon} alt="Clara" className="w-6 h-6 flex-shrink-0 rounded-full" />
+            <img src={faviconIcon} alt="Dobby" className="w-6 h-6 flex-shrink-0 rounded-full" />
             <span className="text-[1.375rem] font-semibold text-[var(--color-text-primary)] whitespace-nowrap overflow-hidden">
               Agents
             </span>

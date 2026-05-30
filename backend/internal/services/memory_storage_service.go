@@ -23,6 +23,7 @@ type MemoryStorageService struct {
 	mongodb           *database.MongoDB
 	collection        *mongo.Collection
 	encryptionService *crypto.EncryptionService
+	embeddingService  *EmbeddingService // optional; nil means embeddings disabled
 }
 
 // NewMemoryStorageService creates a new memory storage service
@@ -31,6 +32,17 @@ func NewMemoryStorageService(mongodb *database.MongoDB, encryptionService *crypt
 		mongodb:           mongodb,
 		collection:        mongodb.Collection(database.CollectionMemories),
 		encryptionService: encryptionService,
+	}
+}
+
+// SetEmbeddingService wires the embedding service after both have been
+// constructed (avoids an init-order cycle in main.go). When unset, the
+// storage service skips embedding generation and SearchByEmbedding becomes
+// a no-op — the selection service falls back to its LLM-only path.
+func (s *MemoryStorageService) SetEmbeddingService(emb *EmbeddingService) {
+	s.embeddingService = emb
+	if emb != nil {
+		log.Printf("📐 [MEMORY-STORAGE] Embedding service attached — new memories will be vectorized")
 	}
 }
 
@@ -68,6 +80,19 @@ func (s *MemoryStorageService) CreateMemory(ctx context.Context, userID, content
 	// Initial score is based solely on source engagement
 	initialScore := sourceEngagement
 
+	// Pre-compute the embedding if a provider is configured. We do this
+	// before insert so the memory lands ready for vector retrieval on the
+	// very next turn. If the embed call fails, log and proceed without —
+	// LLM-based selection still works.
+	var embedding []float32
+	if s.embeddingService != nil {
+		if vec, embErr := s.embeddingService.Embed(ctx, content); embErr == nil {
+			embedding = vec
+		} else {
+			log.Printf("⚠️ [MEMORY-STORAGE] Embedding failed for new memory (skipping): %v", embErr)
+		}
+	}
+
 	// Create new memory
 	memory := &models.Memory{
 		ID:               primitive.NewObjectID(),
@@ -83,6 +108,7 @@ func (s *MemoryStorageService) CreateMemory(ctx context.Context, userID, content
 		IsArchived:       false,
 		ArchivedAt:       nil,
 		SourceEngagement: sourceEngagement,
+		Embedding:        embedding,
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 		Version:          1,
@@ -94,7 +120,7 @@ func (s *MemoryStorageService) CreateMemory(ctx context.Context, userID, content
 		return nil, fmt.Errorf("failed to insert memory: %w", err)
 	}
 
-	log.Printf("✅ [MEMORY-STORAGE] Created new memory (ID: %s, Category: %s, Score: %.2f)", memory.ID.Hex(), category, initialScore)
+	log.Printf("✅ [MEMORY-STORAGE] Created new memory (ID: %s, Category: %s, Score: %.2f, embedded: %v)", memory.ID.Hex(), category, initialScore, len(embedding) > 0)
 	return memory, nil
 }
 
@@ -347,6 +373,75 @@ func (s *MemoryStorageService) GetActiveMemories(ctx context.Context, userID str
 
 	log.Printf("📚 [MEMORY-STORAGE] Retrieved %d active memories for user %s", len(decryptedMemories), userID)
 	return decryptedMemories, nil
+}
+
+// MemoryHit is a single result from SearchByEmbedding: the memory + its
+// cosine similarity to the query vector. Selection callers use Score to
+// optionally rerank or filter.
+type MemoryHit struct {
+	Memory     models.DecryptedMemory
+	Similarity float64
+}
+
+// SearchByEmbedding finds the top-K memories most similar to queryVec using
+// cosine similarity over the per-user active memory set. We load everything
+// into memory and score in a single pass — fine while users stay under
+// ~thousands of memories. For higher scale, swap this for Mongo Atlas
+// $vectorSearch or a dedicated ANN store.
+//
+// Legacy memories without an embedding (created before this feature) are
+// included in the candidate pool with a similarity of 0 — they only surface
+// if topK > #embedded memories, which keeps backward-compat without
+// blocking on a backfill.
+func (s *MemoryStorageService) SearchByEmbedding(ctx context.Context, userID string, queryVec []float32, topK int) ([]MemoryHit, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("empty query vector")
+	}
+	if topK <= 0 || topK > 200 {
+		topK = 10
+	}
+
+	// Use the existing accessor; it already decrypts.
+	candidates, err := s.GetActiveMemories(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]MemoryHit, 0, len(candidates))
+	for _, m := range candidates {
+		sim := 0.0
+		if len(m.Embedding) > 0 {
+			sim = CosineSimilarity(queryVec, m.Embedding)
+		}
+		hits = append(hits, MemoryHit{Memory: m, Similarity: sim})
+	}
+
+	// Stable sort would be nicer; insertion sort over a tiny list with a
+	// single pass is more than fast enough — but for clarity, just do a
+	// straightforward sort with the stdlib.
+	sortHitsDesc(hits)
+
+	if len(hits) > topK {
+		hits = hits[:topK]
+	}
+	log.Printf("🔎 [MEMORY-STORAGE] Vector search returned top %d (of %d candidates) for user %s", len(hits), len(candidates), userID)
+	return hits, nil
+}
+
+// sortHitsDesc orders by Similarity descending. Pulled out so the test
+// suite can use it if it ever wants to verify ordering deterministically.
+func sortHitsDesc(hits []MemoryHit) {
+	// Simple insertion sort — pool stays small (hundreds tops).
+	for i := 1; i < len(hits); i++ {
+		j := i
+		for j > 0 && hits[j-1].Similarity < hits[j].Similarity {
+			hits[j-1], hits[j] = hits[j], hits[j-1]
+			j--
+		}
+	}
 }
 
 // UpdateMemoryAccess increments access count and updates last accessed timestamp

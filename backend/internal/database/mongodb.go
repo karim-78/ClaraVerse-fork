@@ -82,7 +82,7 @@ func NewMongoDB(uri string) (*MongoDB, error) {
 	// Extract database name from URI or use default
 	dbName := extractDBName(uri)
 	if dbName == "" {
-		dbName = "claraverse"
+		dbName = "dobbyai"
 	}
 
 	db := &MongoDB{
@@ -99,8 +99,8 @@ func NewMongoDB(uri string) (*MongoDB, error) {
 // extractDBName extracts the database name from MongoDB URI
 func extractDBName(uri string) string {
 	// Extract database name from URI path component
-	// mongodb://localhost:27017/claraverse?authSource=admin -> claraverse
-	// mongodb+srv://user:pass@cluster/claraverse -> claraverse
+	// mongodb://localhost:27017/dobbyai?authSource=admin -> dobbyai
+	// mongodb+srv://user:pass@cluster/dobbyai -> dobbyai
 
 	// Find the database name between the last "/" and "?" or end of string
 	lastSlash := -1
@@ -130,7 +130,7 @@ func extractDBName(uri string) string {
 	}
 
 	// Default fallback
-	return "claraverse"
+	return "dobbyai"
 }
 
 // Initialize creates indexes for all collections

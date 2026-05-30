@@ -70,12 +70,14 @@ func (c *BlockChecker) CheckBlockCompletion(
 	// Build the validation prompt
 	prompt := c.buildValidationPrompt(workflowGoal, block, blockInput, blockOutput)
 
-	// Get provider for the model
-	provider, err := c.providerService.GetByModelID(modelID)
+	// Get provider for the model. Use *WithName so the request carries
+	// the upstream API name — strict providers (Bedrock) 400 on the row id.
+	provider, apiName, err := c.providerService.GetByModelIDWithName(modelID)
 	if err != nil {
 		log.Printf("⚠️ [BLOCK-CHECKER] Provider error, defaulting to passed: %v", err)
 		return &BlockCheckResult{Passed: true, Reason: "Provider error - defaulting to passed"}, nil
 	}
+	modelID = apiName
 
 	// Build the request with structured output
 	requestBody := map[string]interface{}{

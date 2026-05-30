@@ -65,6 +65,8 @@ import {
 } from '@/services/chatSyncService';
 import { copyAsFormattedText } from '@/utils/markdownToPlainText';
 import { extractArtifacts } from '@/utils/artifactParser';
+import { parseSlashCommand } from '@/utils/slashCommands';
+import { ConversationSearchModal } from '@/components/chat/ConversationSearchModal';
 import { ArtifactPane, ArtifactsGallery } from '@/components/artifacts';
 import type { Artifact } from '@/types/artifact';
 import { useDocumentTitle } from '@/hooks';
@@ -202,6 +204,24 @@ export const Chat = () => {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set());
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Global cmd/ctrl+K → open the conversation-search modal. Bound at the
+  // window level so it works regardless of focus state. Skip when typing
+  // in a contenteditable so we don't hijack Notion-style shortcuts in
+  // future rich-text fields.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k';
+      if (!isCmdK) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.isContentEditable) return;
+      e.preventDefault();
+      setSearchOpen(open => !open);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
   // Mobile sidebar state
@@ -994,6 +1014,7 @@ export const Chat = () => {
                         status: 'completed' as const,
                         result: message.result,
                         plots: message.plots, // Add visualization plots
+                        dataframes: message.dataframes, // Add tabular artifacts (display_df)
                       }
                     : tool
                 );
@@ -1160,6 +1181,16 @@ export const Chat = () => {
                   }
                 } else {
                   console.log('❌ No artifacts found in message');
+                }
+
+                // Attach per-turn usage (tokens / cache / duration / cost)
+                // so AssistantMessage can render the cost chip beneath the
+                // finished message. message.tokens may be absent for tool
+                // continuations or providers that don't emit usage.
+                if (message.tokens) {
+                  state.updateMessage(currentChatId, lastMessage.id, {
+                    usage: message.tokens,
+                  });
                 }
 
                 // Finalize streaming if still marked as streaming
@@ -1632,6 +1663,20 @@ export const Chat = () => {
       // Start with the original text
       let messageToSend = text;
 
+      // Slash-command parsing: /web /code /sql /research /data. Strips the
+      // command prefix from the visible message and prepends the matching
+      // system instruction so the model knows to apply that mode this turn.
+      // Unknown slashes fall through unchanged — the model may still see
+      // them as natural text (e.g. "/path/to/file" in a code snippet).
+      const slash = parseSlashCommand(text);
+      if (slash) {
+        // If the user only typed the command with nothing after, we still
+        // proceed — gives a "what would you like to do in <mode>?" feel.
+        text = slash.rest || `(${slash.hint})`;
+        const userPrefix = systemInstruction ? `\n\n${systemInstruction}` : '';
+        systemInstruction = slash.systemPrefix + userPrefix;
+      }
+
       // Validate message (validate original text, not the prefixed version)
       // Allow empty text if files are present
       if (!text.trim() && (!files || files.length === 0)) {
@@ -2065,6 +2110,42 @@ export const Chat = () => {
     [chat, messages, handleSendMessage, updateMessage]
   );
 
+  // Edit a previous user message + regenerate from there. Forks the
+  // conversation by: (a) updating the user message content in place, (b)
+  // hiding every message that came after it in the visible thread (kept on
+  // disk so version navigation could surface them later — for now they're
+  // just out of view), and (c) re-running the assistant from that point.
+  const handleEditAndRegenerate = useCallback(
+    (messageId: string, newContent: string) => {
+      if (!chat) return;
+      const idx = messages.findIndex(m => m.id === messageId);
+      if (idx === -1) return;
+      const target = messages[idx];
+      if (target.role !== 'user') return;
+
+      // Rewrite the user message in place.
+      updateMessage(chat.id, messageId, { content: newContent });
+
+      // Hide everything that came after it so the chat visually rewinds
+      // to the edited turn. We keep the records on the store (isHidden=true)
+      // rather than deleting — opens the door to version navigation across
+      // edits later, and is safer if the user fat-fingers the edit.
+      for (let i = idx + 1; i < messages.length; i++) {
+        if (!messages[i].isHidden) {
+          updateMessage(chat.id, messages[i].id, { isHidden: true });
+        }
+      }
+
+      // Fire a fresh send. skipUserMessage keeps handleSendMessage from
+      // appending a duplicate — we already have the edited message in the
+      // thread. The assistant regenerates against the new content.
+      handleSendMessage(newContent, {
+        skipUserMessage: true,
+      });
+    },
+    [chat, messages, updateMessage, handleSendMessage]
+  );
+
   // Handle version navigation
   const handleVersionNavigate = useCallback(
     (messageId: string, direction: 'prev' | 'next') => {
@@ -2421,12 +2502,12 @@ export const Chat = () => {
                           'You are a supportive and empathetic life coach. Listen actively and offer constructive advice.',
                       },
                       {
-                        label: "Clara's choice",
+                        label: "Dobby's choice",
                         icon: <Sparkles size={16} />,
                         prompt:
                           'Surprise me with something interesting! It could be a fun fact, a short story, or a creative idea.',
                         systemInstruction:
-                          'You are Clara, a creative and entertaining AI assistant. Be spontaneous and engaging.',
+                          'You are Dobby, a creative and entertaining AI assistant. Be spontaneous and engaging.',
                       },
                     ]}
                     isLoading={isLoading}
@@ -2530,6 +2611,7 @@ export const Chat = () => {
                                     userInitials={userInitials}
                                     copiedMessageId={copiedMessageId}
                                     onCopy={handleCopyMessage}
+                                    onEditSubmit={handleEditAndRegenerate}
                                   />
                                 ) : (
                                   <AssistantMessage
@@ -2638,6 +2720,15 @@ export const Chat = () => {
         )}
       </main>
 
+      {/* Conversation Search Modal (cmd/ctrl + k) */}
+      <ConversationSearchModal
+        isOpen={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onSelect={(targetChatId) => {
+          navigate(`/chat/${targetChatId}`);
+        }}
+      />
+
       {/* Name Input Modal */}
       <NameInputModal isOpen={showNameModal} onSubmit={handleNameSubmit} />
 
@@ -2690,13 +2781,13 @@ export const Chat = () => {
  * Get a random thinking verb for the thinking pane
  */
 const thinkingVerbs = [
-  'Clara is thinking',
-  'Clara is wondering',
-  'Clara is figuring out',
-  'Clara is pondering',
-  'Clara is analyzing',
-  'Clara is reasoning',
-  'Clara is considering',
+  'Dobby is thinking',
+  'Dobby is wondering',
+  'Dobby is figuring out',
+  'Dobby is pondering',
+  'Dobby is analyzing',
+  'Dobby is reasoning',
+  'Dobby is considering',
 ];
 
 let currentThinkingVerb: string | null = null;

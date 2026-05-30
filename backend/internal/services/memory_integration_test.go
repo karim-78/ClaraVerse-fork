@@ -421,7 +421,7 @@ func TestMemorySystemPromptInjection(t *testing.T) {
 	// Simulate building memory context
 	memories := []models.DecryptedMemory{
 		{DecryptedContent: "User prefers dark mode"},
-		{DecryptedContent: "User name is Clara"},
+		{DecryptedContent: "User name is Dobby"},
 		{DecryptedContent: "User timezone is America/New_York"},
 	}
 

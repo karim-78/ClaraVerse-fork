@@ -991,15 +991,22 @@ func (e *AgentBlockExecutor) jsonSchemaToMap(schema *models.JSONSchema) map[stri
 	return result
 }
 
-// resolveModel resolves model alias to actual model ID and provider
+// resolveModel resolves model alias to actual model ID and provider.
+// CRITICAL: returns the model's *bare API name* (the `name` column from the
+// models table), never the row-id form like "3:zai.glm-5" that strict
+// providers (Bedrock OpenAI shim) reject as "invalid model identifier".
 func (e *AgentBlockExecutor) resolveModel(modelID string) (*models.Provider, string, error) {
-	// Step 1: Try direct lookup
-	provider, err := e.providerService.GetByModelID(modelID)
+	// Step 1: Direct lookup. Use the *WithName variant so we get the
+	// upstream API id, not the row id. (GetByModelID alone would echo
+	// back the prefixed input which Bedrock then 400s on.)
+	provider, apiName, err := e.providerService.GetByModelIDWithName(modelID)
 	if err == nil {
-		return provider, modelID, nil
+		log.Printf("✅ [AGENT-BLOCK] Resolved '%s' -> provider=%s, api name=%s", modelID, provider.Name, apiName)
+		return provider, apiName, nil
 	}
 
-	// Step 2: Try model alias resolution
+	// Step 2: Try model alias resolution. ResolveModelAlias already
+	// normalises row-id-shaped values via the chat_service patch we shipped.
 	log.Printf("🔄 [AGENT-BLOCK] Model '%s' not found directly, trying alias resolution...", modelID)
 	if aliasProvider, aliasModel, found := e.chatService.ResolveModelAlias(modelID); found {
 		return aliasProvider, aliasModel, nil
@@ -2077,7 +2084,7 @@ type LLMResponse struct {
 	OutputTokens int
 }
 
-// callLLM makes a streaming call to the LLM (required for ClaraVerse API compatibility)
+// callLLM makes a streaming call to the LLM (required for DobbyAI API compatibility)
 func (e *AgentBlockExecutor) callLLM(
 	ctx context.Context,
 	provider *models.Provider,
@@ -2112,12 +2119,12 @@ func (e *AgentBlockExecutor) callLLMWithSchema(
 	// OpenAI GPT-4o models and newer support json_schema response_format
 	supportsStructuredOutput := (isOpenAI || isOpenRouter) && outputSchema != nil && len(tools) == 0
 
-	// Build request body - use streaming for better compatibility with ClaraVerse API
+	// Build request body - use streaming for better compatibility with DobbyAI API
 	requestBody := map[string]interface{}{
 		"model":       modelID,
 		"messages":    messages,
 		"temperature": temperature,
-		"stream":      true, // Use streaming - ClaraVerse API works better with streaming
+		"stream":      true, // Use streaming - DobbyAI API works better with streaming
 	}
 
 	// Use correct token limit parameter based on provider

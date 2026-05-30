@@ -47,6 +47,17 @@ type CortexService struct {
 	// Skill service for resolving skills attached to daemons
 	skillService *SkillService
 
+	// Artifact store powers structured daemon-to-daemon handoff. Optional —
+	// when nil the produce/list/read_artifact tools surface "unavailable"
+	// errors but Nexus otherwise continues to work via text dep results.
+	artifactStore *NexusArtifactStore
+
+	// Orchestration durability store — per multi-daemon-task checkpoint +
+	// heartbeat. When nil, orchestrations run as before but do not survive
+	// a backend crash. When wired, main.go runs an orphan scan at boot to
+	// resume interrupted runs.
+	nexusOrchStore *NexusOrchestrationStore
+
 	// EventBus — decouples execution from WS lifecycle
 	eventBus *NexusEventBus
 
@@ -103,6 +114,27 @@ func NewCortexService(
 // SetMemorySelectionService sets the memory selection service (late dependency injection)
 func (s *CortexService) SetMemorySelectionService(svc *MemorySelectionService) {
 	s.contextBuilder.memorySelectionSvc = svc
+}
+
+// SetArtifactStore wires the Nexus artifact store. Called by main.go after
+// both services exist. When set, daemons get the produce/list/read_artifact
+// tools and the system-prompt-time artifact listing.
+func (s *CortexService) SetArtifactStore(store *NexusArtifactStore) {
+	s.artifactStore = store
+}
+
+// SetNexusOrchStore wires the orchestration durability store. Called by
+// main.go after construction. With it set, multi-daemon runs checkpoint
+// every completed daemon, heartbeat every 10s, and survive crashes
+// (orphan scan resumes them at boot).
+func (s *CortexService) SetNexusOrchStore(store *NexusOrchestrationStore) {
+	s.nexusOrchStore = store
+}
+
+// NexusOrchStore returns the orchestration durability store (may be nil).
+// Used by main.go's startup orphan scan.
+func (s *CortexService) NexusOrchStore() *NexusOrchestrationStore {
+	return s.nexusOrchStore
 }
 
 // SetToolService sets the tool service on the tool selector (late dependency injection)

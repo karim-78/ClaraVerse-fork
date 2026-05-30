@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"claraverse/internal/e2b"
 )
@@ -13,26 +14,27 @@ func NewPythonRunnerTool() *Tool {
 	return &Tool{
 		Name:        "run_python",
 		DisplayName: "Python Code Runner",
-		Description: `Execute Python code with custom pip dependencies. Install packages on-the-fly and retrieve generated files. Max 5 minutes execution time.
+		Description: `Execute Python code in a persistent sandbox scoped to this conversation. Variables, imports, and DataFrames survive between calls — treat it like a Jupyter session.
 
-⚠️ CRITICAL: This tool CANNOT access user-uploaded files!
-- If user uploaded a file (CSV, Excel, JSON, etc.), use 'analyze_data' tool instead
-- Files uploaded by users are NOT accessible by filename in this sandbox
-- This tool runs in an isolated environment with NO access to local files
+Files uploaded by the user are mounted at /data/<filename>. You can read them directly: pd.read_csv('/data/sales.csv').
 
-USE THIS TOOL FOR:
-- Running Python scripts that need specific pip packages (torch, transformers, etc.)
-- Generating NEW files (model weights, processed data, images, PDFs)
-- Quick computations, API calls, web scraping
-- Processing data from URLs (not local files)
-- Code that doesn't need user-uploaded input files
+DATAFRAME RENDERING: when you want to show a pandas DataFrame to the user as an interactive table (with sort/filter/paginate), call display_df(df) — do not just print(df) or end the cell with df. display_df is auto-injected; you can also pass a name: display_df(df, name='Sales by region').
 
-DO NOT USE FOR:
-- Analyzing user-uploaded CSV/Excel/JSON files → use 'analyze_data' instead
-- Reading local files by filename → they don't exist in sandbox
-- Any task requiring access to files the user shared in chat
+CHARTS: matplotlib / seaborn / plotly figures are captured automatically and rendered inline — just plt.show() at the end. No need for savefig.
 
-Remember: Install dependencies and run code in the same session - no persistence between calls.`,
+PIP: pass new packages in the 'dependencies' array on first use; they install before your code runs.
+
+OUTPUTS: any file you write to /home/user/ (or pass in 'output_files') is collected and made downloadable.
+
+DO use this for:
+- Loading + analyzing user-attached CSV/Excel/Parquet files
+- Multi-step exploration ("load data" → "summarize" → "plot trends")
+- ML training, statistical tests, scraping
+- Generating CSVs, models, plots, PDFs for the user
+
+DON'T use it for:
+- Trivial maths (just compute in text)
+- Live API queries that the search_web / scrape_web tools already do better`,
 		Icon:     "Terminal",
 		Source:   ToolSourceBuiltin,
 		Category: "computation",
@@ -65,12 +67,42 @@ Remember: Install dependencies and run code in the same session - no persistence
 	}
 }
 
+// sandboxBootstrap is prepended to every run_python call. It defines
+// `display_df(df, name='')` which emits a marker-wrapped JSON envelope to
+// stdout that the backend extracts and converts into a renderable DataFrame
+// artifact. Re-defining the function each call is cheap and idempotent —
+// safer than relying on the IPython kernel state surviving between calls
+// (which it does in pooled sandboxes, but new ones still need the func).
+const sandboxBootstrap = `
+import json as _dobby_json, sys as _dobby_sys
+def display_df(df, name=''):
+    """Show a pandas DataFrame as an interactive table artifact in chat."""
+    try:
+        import pandas as _pd
+        if not isinstance(df, _pd.DataFrame):
+            print(df)
+            return
+        preview_rows = min(50, len(df))
+        head = df.head(preview_rows)
+        payload = {
+            'name': str(name) or '',
+            'headers': [str(c) for c in df.columns.tolist()],
+            'rows': head.astype(str).values.tolist(),
+            'row_count': int(len(df)),
+            'col_count': int(len(df.columns)),
+        }
+        print('<<DOBBY_DF>>' + _dobby_json.dumps(payload) + '<</DOBBY_DF>>')
+    except Exception as _e:
+        print('[display_df error: ' + str(_e) + ']', file=_dobby_sys.stderr)
+`
+
 func executePythonRunner(args map[string]interface{}) (string, error) {
 	// Extract code (required)
-	code, ok := args["code"].(string)
-	if !ok || code == "" {
+	userCode, ok := args["code"].(string)
+	if !ok || userCode == "" {
 		return "", fmt.Errorf("code is required")
 	}
+	code := sandboxBootstrap + "\n" + userCode
 
 	// Extract dependencies (optional)
 	var dependencies []string
@@ -92,12 +124,17 @@ func executePythonRunner(args map[string]interface{}) (string, error) {
 		}
 	}
 
-	// Build request
+	// Propagate the conversation_id so the e2b-service pools the sandbox
+	// across turns — dataframes, imports, and globals survive turn-to-turn
+	// instead of being torn down with each call.
+	conversationID, _ := args["__conversation_id__"].(string)
+
 	req := e2b.AdvancedExecuteRequest{
-		Code:         code,
-		Timeout:      300, // 5 minutes for complex tasks like Playwright, ML training, etc.
-		Dependencies: dependencies,
-		OutputFiles:  outputFiles,
+		Code:           code,
+		Timeout:        300, // 5 minutes for complex tasks
+		Dependencies:   dependencies,
+		OutputFiles:    outputFiles,
+		ConversationID: conversationID,
 	}
 
 	// Execute
@@ -105,6 +142,12 @@ func executePythonRunner(args map[string]interface{}) (string, error) {
 	result, err := e2bService.ExecuteAdvanced(context.Background(), req)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute code: %w", err)
+	}
+
+	if result.SandboxReused {
+		log.Printf("🐍 [PYTHON] Reused sandbox %s for conv %s (persistent state ✓)", result.SandboxID, conversationID)
+	} else if result.SandboxID != "" {
+		log.Printf("🐍 [PYTHON] Fresh sandbox %s for conv %s", result.SandboxID, conversationID)
 	}
 
 	if !result.Success {

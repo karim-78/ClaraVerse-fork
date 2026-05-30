@@ -6,7 +6,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Routine represents a scheduled AI agent task in Clara's Claw
+// Routine represents a scheduled AI agent task in Dobby's Claw
 type Routine struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID         string             `bson:"userId" json:"userId"`

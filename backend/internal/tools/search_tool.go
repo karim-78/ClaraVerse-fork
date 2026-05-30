@@ -252,7 +252,7 @@ func performSearch(searxngURL, query string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
 	}
-	req.Header.Set("User-Agent", "ClaraVerse/1.0 (Bot)")
+	req.Header.Set("User-Agent", "DobbyAI/1.0 (Bot)")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Forwarded-For", "127.0.0.1")
 	req.Header.Set("X-Real-IP", "127.0.0.1")

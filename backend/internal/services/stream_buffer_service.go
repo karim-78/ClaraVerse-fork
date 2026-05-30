@@ -35,8 +35,9 @@ type BufferedMessage struct {
 	Status          string                 `json:"status,omitempty"`
 	Arguments       map[string]interface{} `json:"arguments,omitempty"`
 	Result          string                 `json:"result,omitempty"`
-	Plots           interface{}            `json:"plots,omitempty"` // For image artifacts
-	Delivered       bool                   `json:"-"`               // Track if already delivered (not serialized)
+	Plots           interface{}            `json:"plots,omitempty"`      // For image artifacts
+	DataFrames      interface{}            `json:"dataframes,omitempty"` // For tabular artifacts
+	Delivered       bool                   `json:"-"`                    // Track if already delivered (not serialized)
 }
 
 // StreamBuffer holds buffered chunks for a streaming conversation

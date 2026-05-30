@@ -1,6 +1,6 @@
 /* ============================================
-   ClaraVerse Design System v1.0
-   CSS Variables - Rose Pink Edition 🌸
+   DobbyAI Design System v1.0
+   CSS Variables - Emerald Edition 🌸
    ============================================ */
 
 /* Christmas Theme - Active Dec 15 - Jan 1 */
@@ -42,7 +42,7 @@
   /* Borders */
   --color-border: rgba(255, 255, 255, 0.1);
   --color-border-hover: rgba(255, 255, 255, 0.2);
-  --color-border-focus: rgba(233, 30, 99, 0.5);
+  --color-border-focus: rgba(16, 185, 129, 0.5);
 
   /* Text Colors */
   --color-text-primary: #ffffff;
@@ -50,12 +50,12 @@
   --color-text-tertiary: #9a9a9a;
   --color-text-disabled: #5a5a5a;
 
-  /* Rose Pink Accent (Primary) */
-  --color-accent: #e91e63;
-  --color-accent-hover: #f06292;
-  --color-accent-active: #c2185b;
-  --color-accent-light: rgba(233, 30, 99, 0.1);
-  --color-accent-border: rgba(233, 30, 99, 0.3);
+  /* Emerald Accent (Primary) */
+  --color-accent: #10b981;
+  --color-accent-hover: #34d399;
+  --color-accent-active: #059669;
+  --color-accent-light: rgba(16, 185, 129, 0.1);
+  --color-accent-border: rgba(16, 185, 129, 0.3);
 
   /* Status Colors */
   --color-success: #30d158;
@@ -76,9 +76,9 @@
 
   /* Gradients */
   --gradient-text: linear-gradient(180deg, #ffffff 0%, #a0a0a0 100%);
-  --gradient-accent: linear-gradient(135deg, #e91e63 0%, #f06292 100%);
-  --gradient-glow: radial-gradient(circle, rgba(233, 30, 99, 0.3) 0%, transparent 70%);
-  --gradient-shine: linear-gradient(90deg, transparent, rgba(233, 30, 99, 0.5), transparent);
+  --gradient-accent: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  --gradient-glow: radial-gradient(circle, rgba(16, 185, 129, 0.3) 0%, transparent 70%);
+  --gradient-shine: linear-gradient(90deg, transparent, rgba(16, 185, 129, 0.5), transparent);
 
   /* ==================== SHADCN THEME VARIABLES ==================== */
 
@@ -89,7 +89,7 @@
   --card-foreground: 0 0% 96%;
   --popover: 0 0% 4%;
   --popover-foreground: 0 0% 96%;
-  --primary: 340 82% 52%;
+  --primary: 160 84% 39%;
   --primary-foreground: 0 0% 100%;
   --secondary: 0 0% 15%;
   --secondary-foreground: 0 0% 96%;
@@ -101,7 +101,7 @@
   --destructive-foreground: 0 0% 96%;
   --border: 0 0% 15%;
   --input: 0 0% 15%;
-  --ring: 340 82% 52%;
+  --ring: 160 84% 39%;
   --radius: 1rem;
 
   /* ==================== SPACING ==================== */
@@ -178,9 +178,9 @@
   --shadow-2xl: 0 40px 100px rgba(0, 0, 0, 0.6);
 
   /* Accent Glow Shadows */
-  --shadow-glow-sm: 0 0 20px rgba(233, 30, 99, 0.2);
-  --shadow-glow-md: 0 10px 30px rgba(233, 30, 99, 0.3);
-  --shadow-glow-lg: 0 20px 60px rgba(233, 30, 99, 0.4);
+  --shadow-glow-sm: 0 0 20px rgba(16, 185, 129, 0.2);
+  --shadow-glow-md: 0 10px 30px rgba(16, 185, 129, 0.3);
+  --shadow-glow-lg: 0 20px 60px rgba(16, 185, 129, 0.4);
 
   /* Border Radius */
   --radius-none: 0;
@@ -312,7 +312,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:active {
-  background: rgba(233, 30, 99, 0.3);
+  background: rgba(16, 185, 129, 0.3);
 }
 
 /* Firefox */

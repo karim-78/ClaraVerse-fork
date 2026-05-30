@@ -216,16 +216,27 @@ func (s *ModelService) GetToolPredictorModels() ([]models.Model, error) {
 func (s *ModelService) FetchFromProvider(provider *models.Provider) error {
 	log.Printf("🔄 Fetching models from provider: %s", provider.Name)
 
-	// Create HTTP request to provider's /v1/models endpoint
+	// Bedrock's OpenAI-compatible shim does NOT expose /v1/models — it
+	// returns UnknownOperationException. We have to probe a curated catalog
+	// of model IDs and keep only the ones our key actually has access to.
+	if isBedrockProvider(provider.BaseURL) {
+		discovered, err := probeBedrockOpenAIShim(provider.APIKey, provider.BaseURL)
+		if err != nil {
+			return fmt.Errorf("bedrock probe failed: %w", err)
+		}
+		log.Printf("✅ Bedrock probe: %d of %d candidate models accessible", len(discovered), len(bedrockOpenAIShimCatalog))
+		return s.upsertModels(provider, discovered)
+	}
+
+	// OpenAI-compatible providers: GET /v1/models works as standard.
 	req, err := http.NewRequest("GET", provider.BaseURL+"/models", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-
 	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second} // 60s for model list fetch (local providers may be slow)
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch models: %w", err)
@@ -237,7 +248,6 @@ func (s *ModelService) FetchFromProvider(provider *models.Provider) error {
 		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
@@ -248,10 +258,18 @@ func (s *ModelService) FetchFromProvider(provider *models.Provider) error {
 		return fmt.Errorf("failed to parse models response: %w", err)
 	}
 
-	log.Printf("✅ Fetched %d models from %s", len(modelsResp.Data), provider.Name)
+	ids := make([]string, 0, len(modelsResp.Data))
+	for _, m := range modelsResp.Data {
+		ids = append(ids, m.ID)
+	}
+	log.Printf("✅ Fetched %d models from %s", len(ids), provider.Name)
+	return s.upsertModels(provider, ids)
+}
 
-	// Store models in database
-	for _, modelData := range modelsResp.Data {
+// upsertModels writes a discovered model list to the database. Shared by
+// the OpenAI-compat path (GET /v1/models) and the Bedrock probe path.
+func (s *ModelService) upsertModels(provider *models.Provider, modelIDs []string) error {
+	for _, id := range modelIDs {
 		_, err := s.db.Exec(`
 			INSERT INTO models (id, provider_id, name, display_name, fetched_at)
 			VALUES (?, ?, ?, ?, ?)
@@ -259,25 +277,123 @@ func (s *ModelService) FetchFromProvider(provider *models.Provider) error {
 				name = VALUES(name),
 				display_name = VALUES(display_name),
 				fetched_at = VALUES(fetched_at)
-		`, modelData.ID, provider.ID, modelData.ID, modelData.ID, time.Now())
-
+		`, fmt.Sprintf("%d:%s", provider.ID, id), provider.ID, id, id, time.Now())
 		if err != nil {
-			log.Printf("⚠️  Failed to store model %s: %v", modelData.ID, err)
+			log.Printf("⚠️  Failed to store model %s: %v", id, err)
 		}
 	}
 
-	// Log refresh
-	_, err = s.db.Exec(`
+	_, err := s.db.Exec(`
 		INSERT INTO model_refresh_log (provider_id, models_fetched, refreshed_at)
 		VALUES (?, ?, ?)
-	`, provider.ID, len(modelsResp.Data), time.Now())
-
+	`, provider.ID, len(modelIDs), time.Now())
 	if err != nil {
 		log.Printf("⚠️  Failed to log refresh: %v", err)
 	}
 
-	log.Printf("✅ Refreshed %d models for provider %s", len(modelsResp.Data), provider.Name)
+	log.Printf("✅ Refreshed %d models for provider %s", len(modelIDs), provider.Name)
 	return nil
+}
+
+// isBedrockProvider sniffs the base_url to decide whether to use the Bedrock
+// probe path (no /v1/models endpoint) vs the standard OpenAI-compatible
+// path. Matches both the runtime and mantle hosts.
+func isBedrockProvider(baseURL string) bool {
+	u := strings.ToLower(baseURL)
+	return strings.Contains(u, "bedrock-runtime") || strings.Contains(u, "bedrock-mantle")
+}
+
+// bedrockOpenAIShimCatalog is the curated list of model IDs that Bedrock's
+// OpenAI-compatible inference engine ("Mantle") currently serves. AWS rolls
+// new ones into this surface quietly — add candidates here when AWS
+// announces, the probe will skip anything not accessible to the given key.
+//
+// Pulled from live testing on ap-south-1 / us-east-1 in May 2026. Update
+// over time; keep IDs alphabetical to make diffs reviewable.
+var bedrockOpenAIShimCatalog = []string{
+	// Moonshot
+	"moonshotai.kimi-k2.5",
+	// OpenAI gpt-oss (Harmony reasoning format — model emits <reasoning> tags)
+	"openai.gpt-oss-120b-1:0",
+	"openai.gpt-oss-20b-1:0",
+	// Qwen
+	"qwen.qwen3-32b-v1:0",
+	"qwen.qwen3-coder-480b-a35b-v1:0",
+	// Z.AI (formerly Zhipu)
+	"zai.glm-5",
+}
+
+// probeBedrockOpenAIShim sends a minimal chat-completions request to each
+// candidate model and keeps the ones the key has access to. We deliberately
+// use chat-completions (not /v1/models which the shim doesn't expose) — a
+// 200 = the key can invoke it, 400/404 = it's not on the catalog for this
+// account/region.
+//
+// Runs concurrently with a bounded worker pool to keep total probe time
+// under ~5s even if a few endpoints are slow. Each probe asks for 1 token
+// so cost is negligible — call this once on provider add + maybe once a
+// week on a refresh schedule, not on every chat turn.
+func probeBedrockOpenAIShim(apiKey, baseURL string) ([]string, error) {
+	const concurrency = 4
+	type result struct {
+		id string
+		ok bool
+	}
+	jobs := make(chan string, len(bedrockOpenAIShimCatalog))
+	results := make(chan result, len(bedrockOpenAIShimCatalog))
+
+	probe := func(id string) bool {
+		body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ok"}],"max_tokens":1}`, id)
+		req, err := http.NewRequest("POST",
+			strings.TrimRight(baseURL, "/")+"/chat/completions",
+			strings.NewReader(body))
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		// 200 = invokable. 400/404 = unknown id for this key. 401/403 =
+		// auth — treat as failure so we don't surface a model the user
+		// can't actually use.
+		return resp.StatusCode == http.StatusOK
+	}
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			for id := range jobs {
+				results <- result{id: id, ok: probe(id)}
+			}
+		}()
+	}
+	for _, id := range bedrockOpenAIShimCatalog {
+		jobs <- id
+	}
+	close(jobs)
+
+	var accessible []string
+	for i := 0; i < len(bedrockOpenAIShimCatalog); i++ {
+		r := <-results
+		if r.ok {
+			accessible = append(accessible, r.id)
+		}
+	}
+	// Stable order matches the catalog so re-runs don't shuffle the DB.
+	out := make([]string, 0, len(accessible))
+	for _, id := range bedrockOpenAIShimCatalog {
+		for _, a := range accessible {
+			if a == id {
+				out = append(out, id)
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 // SyncModelAliasMetadata syncs metadata from model aliases to the database

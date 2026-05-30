@@ -388,7 +388,7 @@ export const UsageSection: React.FC = () => {
           <Brain size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
           <p style={{ fontSize: '14px' }}>No memories stored yet</p>
           <p style={{ fontSize: '12px', marginTop: '4px' }}>
-            Memories will be extracted as you chat with Clara
+            Memories will be extracted as you chat with Dobby
           </p>
         </div>
       )}
@@ -441,7 +441,7 @@ export const UsageSection: React.FC = () => {
               <section>
                 <h3 className="text-sm font-semibold mb-2 text-gray-300">How it works</h3>
                 <p className="text-gray-400 leading-relaxed text-xs">
-                  Clara automatically extracts and stores key information from your conversations.
+                  Dobby automatically extracts and stores key information from your conversations.
                   Relevant memories are injected into future chats to provide context and
                   continuity.
                 </p>
@@ -527,7 +527,7 @@ export const UsageSection: React.FC = () => {
                     </li>
                     <li className="flex items-start gap-2 text-xs">
                       <span className="text-gray-300/50 mt-0.5">•</span>
-                      <span>ClaraVerse administrators cannot access your encrypted memories</span>
+                      <span>DobbyAI administrators cannot access your encrypted memories</span>
                     </li>
                     <li className="flex items-start gap-2 text-xs">
                       <span className="text-gray-300/50 mt-0.5">•</span>

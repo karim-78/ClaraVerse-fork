@@ -32,6 +32,12 @@ type Memory struct {
 	// Engagement Metrics (for PageRank calculation)
 	SourceEngagement float64 `bson:"sourceEngagement" json:"source_engagement"` // Engagement score of conversation it came from
 
+	// Embedding for vector retrieval (added 2026-05). Stored alongside the
+	// encrypted text — the embedding is a derivative and isn't sensitive
+	// once you have the content. Empty for legacy memories created before
+	// embedding support; those fall back to LLM-only selection.
+	Embedding []float32 `bson:"embedding,omitempty" json:"-"`
+
 	// Timestamps
 	CreatedAt time.Time `bson:"createdAt" json:"created_at"`
 	UpdatedAt time.Time `bson:"updatedAt" json:"updated_at"`

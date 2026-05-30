@@ -94,7 +94,7 @@ export function TaskInputBar({ onSendMessage }: TaskInputBarProps) {
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder="Give Clara a task..."
+            placeholder="Give Dobby a task..."
             rows={1}
           />
 

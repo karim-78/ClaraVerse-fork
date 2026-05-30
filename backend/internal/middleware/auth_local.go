@@ -212,8 +212,8 @@ func OptionalLocalAuthMiddleware(jwtAuth *auth.LocalJWTAuth) fiber.Handler {
 	}
 }
 
-// isDeviceToken checks if a token looks like a ClaraVerse device JWT
-// Device tokens are JWTs with "claraverse" issuer
+// isDeviceToken checks if a token looks like a DobbyAI device JWT
+// Device tokens are JWTs with "dobbyai" issuer
 func isDeviceToken(token string) bool {
 	// JWTs have 3 parts separated by dots
 	parts := strings.Split(token, ".")

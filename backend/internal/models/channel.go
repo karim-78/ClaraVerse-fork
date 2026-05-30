@@ -15,7 +15,7 @@ const (
 )
 
 // Channel represents a communication channel configuration for a user
-// Channels allow users to chat with ClaraVerse AI from external platforms
+// Channels allow users to chat with DobbyAI from external platforms
 // instead of the web UI
 type Channel struct {
 	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
@@ -64,7 +64,7 @@ type ChannelSession struct {
 	ChannelID      primitive.ObjectID `bson:"channelId" json:"channelId"`
 	PlatformUserID string             `bson:"platformUserId" json:"platformUserId"` // e.g., Telegram user ID
 	PlatformChatID string             `bson:"platformChatId" json:"platformChatId"` // e.g., Telegram chat ID
-	ConversationID string             `bson:"conversationId" json:"conversationId"` // ClaraVerse conversation ID
+	ConversationID string             `bson:"conversationId" json:"conversationId"` // DobbyAI conversation ID
 	ModelID        string             `bson:"modelId" json:"modelId"`
 	Messages       []ChannelMessage   `bson:"messages" json:"messages"`
 	CreatedAt      time.Time          `bson:"createdAt" json:"createdAt"`

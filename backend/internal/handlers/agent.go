@@ -1143,7 +1143,7 @@ func (h *AgentHandler) Ask(c *fiber.Ctx) error {
 	}
 
 	// Build system prompt
-	systemPrompt := fmt.Sprintf(`You are an AI assistant helping users understand their workflow agent in ClaraVerse.
+	systemPrompt := fmt.Sprintf(`You are an AI assistant helping users understand their workflow agent in DobbyAI.
 
 **Agent Name**: %s
 **Agent Description**: %s
@@ -1172,14 +1172,17 @@ Be helpful, clear, and concise. If you don't know something, say so.`,
 		modelID = "gpt-4.1" // Default model
 	}
 
-	// Get provider for model
-	provider, err := h.providerService.GetByModelID(modelID)
+	// Get provider for model. Use *WithName so the request body carries
+	// the upstream API name (e.g. "zai.glm-5") not the row id ("3:zai.glm-5")
+	// — Bedrock and other strict providers reject the prefixed form.
+	provider, apiName, err := h.providerService.GetByModelIDWithName(modelID)
 	if err != nil {
 		log.Printf("❌ [ASK] Failed to get provider for model %s: %v", modelID, err)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": fmt.Sprintf("Model '%s' not found", modelID),
 		})
 	}
+	modelID = apiName
 
 	// Build OpenAI-compatible request
 	type Message struct {
@@ -1393,13 +1396,14 @@ RULES:
 		})
 	}
 
-	provider, err := h.providerService.GetByModelID(modelID)
+	provider, apiName, err := h.providerService.GetByModelIDWithName(modelID)
 	if err != nil {
 		log.Printf("❌ [AUTOFILL] Failed to get provider for model %s: %v", modelID, err)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": fmt.Sprintf("Model '%s' not found — configure a model in your workflow first", modelID),
 		})
 	}
+	modelID = apiName // use upstream API name, not row id
 
 	// Build OpenAI-compatible request
 	type Message struct {

@@ -61,7 +61,7 @@ const badgeInfo: Record<
     icon: <FlaskConical size={20} />,
     title: 'Newly Added',
     description:
-      'A recently added model to ClaraVerse. Try it out and explore its capabilities - it might become your new favorite!',
+      'A recently added model to DobbyAI. Try it out and explore its capabilities - it might become your new favorite!',
     color: '#10b981',
   },
 };

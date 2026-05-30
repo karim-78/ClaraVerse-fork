@@ -47,12 +47,16 @@ type ExecuteResponse struct {
 	ExecutionTime *float64     `json:"execution_time"`
 }
 
-// AdvancedExecuteRequest represents a request with dependencies and output files
+// AdvancedExecuteRequest represents a request with dependencies and output files.
+// ConversationID enables sandbox pooling — calls with the same conversation_id
+// share a long-lived sandbox so dataframes, imports, and globals persist
+// across model turns. Empty = ephemeral sandbox (legacy behaviour).
 type AdvancedExecuteRequest struct {
-	Code         string   `json:"code"`
-	Timeout      int      `json:"timeout,omitempty"`
-	Dependencies []string `json:"dependencies,omitempty"`
-	OutputFiles  []string `json:"output_files,omitempty"`
+	Code           string   `json:"code"`
+	Timeout        int      `json:"timeout,omitempty"`
+	Dependencies   []string `json:"dependencies,omitempty"`
+	OutputFiles    []string `json:"output_files,omitempty"`
+	ConversationID string   `json:"conversation_id,omitempty"`
 }
 
 // FileResult represents a file retrieved from the sandbox
@@ -62,7 +66,10 @@ type FileResult struct {
 	Size     int    `json:"size"`
 }
 
-// AdvancedExecuteResponse represents the response with files
+// AdvancedExecuteResponse represents the response with files.
+// SandboxID + SandboxReused are populated by the persistent pool: they tell
+// the caller which physical sandbox served the request and whether it was
+// reused from a prior turn. Useful for logging cache-hit-style metrics.
 type AdvancedExecuteResponse struct {
 	Success       bool         `json:"success"`
 	Stdout        string       `json:"stdout"`
@@ -72,6 +79,8 @@ type AdvancedExecuteResponse struct {
 	Files         []FileResult `json:"files"`
 	ExecutionTime *float64     `json:"execution_time"`
 	InstallOutput string       `json:"install_output"`
+	SandboxID     string       `json:"sandbox_id,omitempty"`
+	SandboxReused bool         `json:"sandbox_reused,omitempty"`
 }
 
 var (

@@ -354,11 +354,15 @@ func (h *WorkflowWebSocketHandler) handleExecuteWorkflow(
 	msg.Input["__user_id__"] = userID
 
 	// Build execution options - block checker is controlled by client request
-	// When enabled, it validates that each block actually accomplished its job
+	// When enabled, it validates that each block actually accomplished its job.
+	// ExecutionID + UserID are forwarded so the durable state store can
+	// checkpoint per-block, dedupe retries, and resume after crashes.
 	execOptions := &execution.ExecutionOptions{
 		WorkflowGoal:       agent.Description,     // Use agent description as workflow goal
 		EnableBlockChecker: msg.EnableBlockChecker, // Controlled by frontend toggle
 		CheckerModelID:     msg.CheckerModelID,
+		ExecutionID:        execID,
+		UserID:             userID,
 	}
 	if msg.EnableBlockChecker {
 		log.Printf("🔍 [WORKFLOW-WS] Block checker ENABLED (model: %s)", execOptions.CheckerModelID)

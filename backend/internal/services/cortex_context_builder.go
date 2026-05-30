@@ -46,7 +46,7 @@ func (b *CortexContextBuilder) BuildCortexSystemPrompt(
 	var sb strings.Builder
 
 	// 1. Base identity
-	sb.WriteString("You are Cortex, Clara's AI orchestrator. You analyze user requests and either respond directly (quick mode) or deploy specialized Daemons (sub-agents) for complex tasks.\n\n")
+	sb.WriteString("You are Cortex, Dobby's AI orchestrator. You analyze user requests and either respond directly (quick mode) or deploy specialized Daemons (sub-agents) for complex tasks.\n\n")
 
 	// 2. Persona facts
 	personaPrompt, err := b.personaService.BuildSystemPrompt(ctx, userID)

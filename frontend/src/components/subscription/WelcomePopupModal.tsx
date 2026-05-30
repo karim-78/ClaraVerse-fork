@@ -97,7 +97,7 @@ export function WelcomePopupModal() {
                 Welcome Onboard!
               </h2>
               <p className="text-base text-gray-700 dark:text-gray-300">
-                Enjoy <strong className="text-blue-600 dark:text-blue-400">Clara PRO</strong> for
+                Enjoy <strong className="text-blue-600 dark:text-blue-400">Dobby PRO</strong> for
                 the next <strong>{daysRemaining} days</strong>
               </p>
             </div>

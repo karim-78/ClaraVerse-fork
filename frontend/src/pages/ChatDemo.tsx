@@ -120,7 +120,7 @@ All components follow the **Rose Pink** design system with a premium dark theme.
       {/* Header */}
       <div className="chat-demo-header">
         <div>
-          <Typography variant="h3">ClaraVerse AI Chat</Typography>
+          <Typography variant="h3">DobbyAI Chat</Typography>
           <Typography variant="sm" className="chat-demo-subtitle">
             Complete AI Chat Design System
           </Typography>

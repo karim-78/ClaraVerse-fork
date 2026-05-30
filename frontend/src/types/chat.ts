@@ -1,4 +1,4 @@
-import type { Attachment, PlotData } from './websocket';
+import type { Attachment, PlotData, DataFrameData, TokenUsage } from './websocket';
 import type { Artifact } from './artifact';
 import type { ActivePrompt } from './interactivePrompt';
 
@@ -11,6 +11,7 @@ export interface ToolCall {
   query?: string;
   result?: string;
   plots?: PlotData[]; // Visualization plots from E2B tools
+  dataframes?: DataFrameData[]; // Tabular artifacts from display_df()
   timestamp: number;
   isExpanded?: boolean;
 }
@@ -36,6 +37,7 @@ export interface Message {
   statusUpdate?: string; // Pre-processing status (skill routing, tool selection, generating)
   attachments?: Attachment[]; // File attachments (images, PDFs)
   artifacts?: Artifact[]; // Renderable artifacts (HTML, SVG, Mermaid)
+  usage?: TokenUsage; // Per-turn token/cost/latency for the cost chip
 
   // Interactive prompt (when AI asks clarifying questions)
   interactivePrompt?: {

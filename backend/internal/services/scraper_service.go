@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultUserAgent     = "ClaraVerse-Bot/1.0 (+https://claraverse.example.com/bot)"
+	defaultUserAgent     = "DobbyAI-Bot/1.0 (+https://dobbyai.example.com/bot)"
 	defaultMaxBodySize   = 10 * 1024 * 1024  // 10MB
 	defaultMaxConcurrent = 10
 	defaultGlobalRate    = 10.0 // requests per second

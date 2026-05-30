@@ -81,7 +81,7 @@ type MultiStepGenerateResponse struct {
 }
 
 // Tool selection system prompt - asks LLM to select relevant tools
-const ToolSelectionSystemPrompt = `You are a tool selection expert for Clara AI workflow builder. Your job is to analyze user requests and select the MINIMUM set of tools needed to accomplish the task.
+const ToolSelectionSystemPrompt = `You are a tool selection expert for Dobby AI workflow builder. Your job is to analyze user requests and select the MINIMUM set of tools needed to accomplish the task.
 
 IMPORTANT: Only select tools that are DIRECTLY needed for the workflow. Don't over-select.
 

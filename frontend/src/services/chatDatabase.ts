@@ -59,7 +59,7 @@ interface ChatDBSchema {
   };
 }
 
-const DB_NAME_PREFIX = 'claraverse-chats';
+const DB_NAME_PREFIX = 'dobbyai-chats';
 const DB_VERSION = 1;
 
 // Current user ID for user-specific database

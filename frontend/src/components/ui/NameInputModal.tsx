@@ -52,7 +52,7 @@ export const NameInputModal: React.FC<NameInputModalProps> = ({ isOpen, onSubmit
   return (
     <div className={styles.overlay}>
       <div className={styles.modal}>
-        <h1 className={styles.title}>Welcome to ClaraVerse Chat</h1>
+        <h1 className={styles.title}>Welcome to DobbyAI Chat</h1>
 
         <p className={styles.description}>Before we start, what should we call you?</p>
 

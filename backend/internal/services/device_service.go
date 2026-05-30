@@ -685,7 +685,7 @@ func (s *DeviceService) generateAccessToken(userID, deviceID string) (string, er
 	now := time.Now()
 	claims := &DeviceTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    "claraverse",
+			Issuer:    "dobbyai",
 			Subject:   userID,
 			ExpiresAt: jwt.NewNumericDate(now.Add(AccessTokenExpiry)),
 			IssuedAt:  jwt.NewNumericDate(now),

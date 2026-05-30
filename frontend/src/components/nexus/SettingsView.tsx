@@ -244,7 +244,7 @@ export const SettingsView = memo(function SettingsView({ send }: SettingsViewPro
         </div>
 
         <p className={styles.settingsDescription}>
-          Facts about your preferences and how Clara should interact with you.
+          Facts about your preferences and how Dobby should interact with you.
         </p>
 
         {adding && (
@@ -263,7 +263,7 @@ export const SettingsView = memo(function SettingsView({ send }: SettingsViewPro
               className={styles.settingsInput}
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
-              placeholder="e.g. Clara is concise and direct"
+              placeholder="e.g. Dobby is concise and direct"
               onKeyDown={(e) => e.key === 'Enter' && handleAddFact()}
             />
             <div className={styles.settingsFormActions}>

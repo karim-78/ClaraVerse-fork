@@ -425,7 +425,7 @@ export const SkillEditor = () => {
                   <div className="skill-editor__tool-empty">
                     {deviceFilter
                       ? 'No servers match your filter.'
-                      : 'No MCP servers connected. Connect servers in Clara\u2019s Claw.'}
+                      : 'No MCP servers connected. Connect servers in Dobby\u2019s Claw.'}
                   </div>
                 )}
                 {filteredServers.map(server => (

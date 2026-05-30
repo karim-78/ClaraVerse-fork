@@ -112,7 +112,7 @@ export const CortexConversation = memo(function CortexConversation({
             </div>
             <h3 className={styles.emptyStateTitle}>What can I help with?</h3>
             <p className={styles.emptyStateDescription}>
-              Give Clara a task. Simple questions get instant answers. Complex tasks deploy
+              Give Dobby a task. Simple questions get instant answers. Complex tasks deploy
               specialized Daemons that work autonomously with tools.
             </p>
             <div className={styles.suggestionPills}>
@@ -161,7 +161,7 @@ export const CortexConversation = memo(function CortexConversation({
                   <div className={styles.assistantMessage}>
                     <div className={styles.assistantLabel}>
                       <Brain size={14} />
-                      <span>Clara</span>
+                      <span>Dobby</span>
                     </div>
                     <div className={styles.assistantContent}>
                       <MarkdownRenderer content={item.content} />

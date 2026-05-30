@@ -13,7 +13,7 @@ export const PrivacyPolicySidebar = () => {
         <section className="policy-summary">
           <h3>The Short Version</h3>
           <p>
-            We collect only what's necessary to provide ClaraVerse services. Your data is encrypted,
+            We collect only what's necessary to provide DobbyAI services. Your data is encrypted,
             you can export it anytime, and you can delete everything with one click. We don't sell
             your data. Ever.
           </p>
@@ -57,7 +57,7 @@ export const PrivacyPolicySidebar = () => {
         <section className="policy-section">
           <h3>2. How We Use Your Data</h3>
           <ul>
-            <li>To provide and operate ClaraVerse services</li>
+            <li>To provide and operate DobbyAI services</li>
             <li>To process your requests through AI model providers</li>
             <li>To sync your data across devices (when you enable cloud sync)</li>
             <li>To authenticate and secure your account</li>
@@ -88,7 +88,7 @@ export const PrivacyPolicySidebar = () => {
                 <tr>
                   <td>
                     Local Conversations - (There stored in your browser never accessible by
-                    claraverse)
+                    dobbyai)
                   </td>
                   <td>Until cleared</td>
                 </tr>
@@ -186,8 +186,8 @@ export const PrivacyPolicySidebar = () => {
         <section className="policy-section policy-contact">
           <h3>9. Contact Us</h3>
           <p>Questions about this policy or want to exercise your rights?</p>
-          <a href="mailto:privacy@claraverse.app" className="policy-email-link">
-            privacy@claraverse.app
+          <a href="mailto:privacy@dobbyai.app" className="policy-email-link">
+            privacy@dobbyai.app
           </a>
         </section>
 

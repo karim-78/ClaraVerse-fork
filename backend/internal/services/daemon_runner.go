@@ -73,6 +73,7 @@ type DaemonRunner struct {
 	daemonStore     *DaemonPool
 	contextBuilder  *CortexContextBuilder
 	toolSelector    *CortexToolSelector
+	artifactStore   *NexusArtifactStore // optional; enables produce/list/read_artifact tools
 }
 
 // DaemonRunnerConfig holds configuration for creating a DaemonRunner
@@ -90,6 +91,7 @@ type DaemonRunnerConfig struct {
 	DaemonStore     *DaemonPool
 	ContextBuilder  *CortexContextBuilder
 	ToolSelector    *CortexToolSelector
+	ArtifactStore   *NexusArtifactStore
 	DepResults         map[string]string          // Predecessor daemon results
 	OriginalMessage    string                     // User's original message (passed through to daemon)
 	ProjectInstruction string                     // System instruction from the containing project
@@ -131,7 +133,86 @@ func NewDaemonRunner(cfg DaemonRunnerConfig) *DaemonRunner {
 		daemonStore:     cfg.DaemonStore,
 		contextBuilder:  cfg.ContextBuilder,
 		toolSelector:    cfg.ToolSelector,
+		artifactStore:   cfg.ArtifactStore,
 	}
+}
+
+// buildArtifactCatalogue renders the "Available artifacts" section appended
+// to a daemon's system prompt so the model knows what structured data
+// predecessors produced. Compact: names + types + one-line summaries only —
+// the model fetches full content via read_artifact on demand.
+func buildArtifactCatalogue(items []NexusArtifactSummary) string {
+	var b strings.Builder
+	b.WriteString("\n## Available Artifacts (from prior daemons in this session)\n\n")
+	b.WriteString("These are structured outputs produced by earlier daemons in this orchestration. ")
+	b.WriteString("Call read_artifact(name) to pull the full content; do NOT re-derive what's already here.\n\n")
+	for _, it := range items {
+		line := fmt.Sprintf("- `%s` [%s, %d bytes]", it.Name, it.ContentType, it.SizeBytes)
+		if it.Summary != "" {
+			line += " — " + it.Summary
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nProduce your own outputs via produce_artifact(name, content_type, content, summary) so downstream daemons can use them.\n")
+	return b.String()
+}
+
+// nexusArtifactToolAdapter satisfies tools.NexusArtifactAccess by binding
+// the store to this daemon's user + session, so the tools (produce/list/
+// read_artifact) can never reach into a different orchestration's data.
+type nexusArtifactToolAdapter struct {
+	store     *NexusArtifactStore
+	userID    string
+	sessionID primitive.ObjectID
+	daemonID  primitive.ObjectID
+}
+
+func (a *nexusArtifactToolAdapter) Produce(ctx context.Context, name, contentType, content, summary string) (tools.ProducedArtifact, error) {
+	doc, err := a.store.Produce(ctx, a.userID, a.sessionID, a.daemonID, name, contentType, content, summary)
+	if err != nil {
+		return tools.ProducedArtifact{}, err
+	}
+	return tools.ProducedArtifact{
+		ID:          doc.ID.Hex(),
+		Name:        doc.Name,
+		ContentType: doc.ContentType,
+		SizeBytes:   doc.SizeBytes,
+	}, nil
+}
+
+func (a *nexusArtifactToolAdapter) List(ctx context.Context) ([]tools.ListedArtifact, error) {
+	items, err := a.store.List(ctx, a.sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tools.ListedArtifact, 0, len(items))
+	for _, s := range items {
+		out = append(out, tools.ListedArtifact{
+			Name:        s.Name,
+			ContentType: s.ContentType,
+			Summary:     s.Summary,
+			SizeBytes:   s.SizeBytes,
+		})
+	}
+	return out, nil
+}
+
+func (a *nexusArtifactToolAdapter) Read(ctx context.Context, name string) (*tools.FetchedArtifact, error) {
+	doc, err := a.store.Read(ctx, a.sessionID, name)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, nil
+	}
+	return &tools.FetchedArtifact{
+		Name:        doc.Name,
+		ContentType: doc.ContentType,
+		Content:     doc.Content,
+		Summary:     doc.Summary,
+		SizeBytes:   doc.SizeBytes,
+	}, nil
 }
 
 // Cancel stops the daemon execution
@@ -175,6 +256,19 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 	// Update daemon status to executing
 	r.updateStatus(models.DaemonStatusExecuting, "Initializing...", 0.0)
 
+	// Pull predecessor artifacts so the system prompt advertises what
+	// structured data the daemon can read instead of relying only on the
+	// 4000-char text summaries. The actual content stays in the store —
+	// the daemon pulls via read_artifact when it wants the body.
+	var artifactsAvailable []NexusArtifactSummary
+	if r.artifactStore != nil && !r.instance.SessionID.IsZero() {
+		listCtx, listCancel := context.WithTimeout(ctx, 3*time.Second)
+		if items, err := r.artifactStore.List(listCtx, r.instance.SessionID); err == nil {
+			artifactsAvailable = items
+		}
+		listCancel()
+	}
+
 	// 1. Build system prompt using the task description (summary for context)
 	systemPrompt := r.contextBuilder.BuildDaemonSystemPrompt(
 		ctx,
@@ -186,6 +280,9 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 		r.projectInstruction,
 		r.skillIDs,
 	)
+	if len(artifactsAvailable) > 0 {
+		systemPrompt += buildArtifactCatalogue(artifactsAvailable)
+	}
 
 	// 2. Select tools for this daemon using the actual task
 	selectedTools, toolNames := r.toolSelector.SelectToolsForDaemon(
@@ -253,7 +350,7 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 		r.preflightSizeCheck(messages)
 
 		// Call LLM with overflow recovery
-		response, toolCalls, err := r.callLLMWithOverflowRetry(ctx, config, messages, selectedTools)
+		response, toolCalls, finishReason, err := r.callLLMWithOverflowRetry(ctx, config, messages, selectedTools)
 		if err != nil {
 			if r.handleError(ctx, err) {
 				continue // Retry
@@ -336,8 +433,18 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 				Content: response,
 			})
 
-			// Check if daemon considers itself done
-			if r.isComplete(response) {
+			// Completion: trust finish_reason from the provider over text matching.
+			// "stop" with no tool calls is the canonical end-of-turn for OpenAI
+			// Chat Completions and Bedrock's OpenAI shim. Fall back to the
+			// string heuristic only when finish_reason is missing (some
+			// providers omit it on tool-free responses).
+			done := finishReason == "stop"
+			if finishReason == "" {
+				done = r.isComplete(response)
+			}
+			if done {
+				log.Printf("[DAEMON %s] Completing (finish_reason=%q, response_len=%d)",
+					r.instance.RoleLabel, finishReason, len(response))
 				r.complete(ctx, response)
 				return
 			}
@@ -531,15 +638,16 @@ func isContextOverflowError(statusCode int, body string) bool {
 }
 
 // callLLMWithOverflowRetry wraps callLLM with 3-tier overflow recovery.
-func (r *DaemonRunner) callLLMWithOverflowRetry(ctx context.Context, config *models.Config, messages []map[string]interface{}, tools []map[string]interface{}) (string, []interface{}, error) {
+// Returns (content, toolCalls, finishReason, error).
+func (r *DaemonRunner) callLLMWithOverflowRetry(ctx context.Context, config *models.Config, messages []map[string]interface{}, tools []map[string]interface{}) (string, []interface{}, string, error) {
 	// Tier 0: Normal call
-	response, toolCalls, err := r.callLLM(ctx, config, messages, tools)
+	response, toolCalls, finish, err := r.callLLM(ctx, config, messages, tools)
 	if err == nil {
-		return response, toolCalls, nil
+		return response, toolCalls, finish, nil
 	}
 
 	if !strings.Contains(err.Error(), "context overflow") {
-		return "", nil, err
+		return "", nil, "", err
 	}
 
 	// Tier 1: Emergency trim (all tool results → 200 chars), retry
@@ -552,13 +660,13 @@ func (r *DaemonRunner) callLLMWithOverflowRetry(ctx context.Context, config *mod
 		}
 	}
 
-	response, toolCalls, err = r.callLLM(ctx, config, messages, tools)
+	response, toolCalls, finish, err = r.callLLM(ctx, config, messages, tools)
 	if err == nil {
-		return response, toolCalls, nil
+		return response, toolCalls, finish, nil
 	}
 
 	if !strings.Contains(err.Error(), "context overflow") {
-		return "", nil, err
+		return "", nil, "", err
 	}
 
 	// Tier 2: Nuclear trim (keep system + summary + last 4 messages)
@@ -580,13 +688,13 @@ func (r *DaemonRunner) callLLMWithOverflowRetry(ctx context.Context, config *mod
 		messages = append(messages, kept...)
 	}
 
-	response, toolCalls, err = r.callLLM(ctx, config, messages, tools)
+	response, toolCalls, finish, err = r.callLLM(ctx, config, messages, tools)
 	if err == nil {
-		return response, toolCalls, nil
+		return response, toolCalls, finish, nil
 	}
 
 	// Tier 3: Give up
-	return "", nil, fmt.Errorf("context overflow persists after all recovery attempts: %w", err)
+	return "", nil, "", fmt.Errorf("context overflow persists after all recovery attempts: %w", err)
 }
 
 // ── LLM Interaction ────────────────────────────────────────────────
@@ -605,14 +713,16 @@ func (r *DaemonRunner) resolveModelConfig(modelID string) (*models.Config, error
 		}
 	}
 
-	// 2. Try provider lookup by model ID
+	// 2. Try provider lookup by model ID. Use the *WithName variant so we
+	// send the upstream API name to the provider, not the row id — Bedrock
+	// (and anything else strict) 400s on the prefixed form.
 	if r.providerService != nil {
-		provider, err := r.providerService.GetByModelID(modelID)
+		provider, apiName, err := r.providerService.GetByModelIDWithName(modelID)
 		if err == nil && provider.Enabled {
 			return &models.Config{
 				BaseURL:    provider.BaseURL,
 				APIKey:     provider.APIKey,
-				Model:      modelID,
+				Model:      apiName,
 				ProviderID: provider.ID,
 			}, nil
 		}
@@ -635,7 +745,17 @@ func (r *DaemonRunner) resolveModelConfig(modelID string) (*models.Config, error
 // callLLM makes a single LLM request and returns content + tool calls.
 // Detects context overflow errors and wraps them for the retry handler.
 // Extracts usage.prompt_tokens from API response for context tracking.
-func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messages []map[string]interface{}, availableTools []map[string]interface{}) (string, []interface{}, error) {
+// callLLM returns content, tool calls, finish_reason, and error.
+// finish_reason mirrors the OpenAI Chat Completions field ("stop", "tool_calls",
+// "length", "content_filter", etc.). Used by the loop to decide completion
+// instead of string-matching the response.
+func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messages []map[string]interface{}, availableTools []map[string]interface{}) (string, []interface{}, string, error) {
+	// Annotate system message with cache_control for cache-capable providers
+	// before serialization. Mutates messages in place; safe because the
+	// system prompt is the only marker we set and applyPromptCaching is
+	// idempotent.
+	applyPromptCaching(messages, config.BaseURL)
+
 	reqBody := map[string]interface{}{
 		"model":    config.Model,
 		"messages": messages,
@@ -647,13 +767,13 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to marshal request: %w", err)
+		return "", nil, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	url := config.BaseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqJSON))
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to create request: %w", err)
+		return "", nil, "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -661,7 +781,7 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 
 	resp, err := daemonHTTPClient.Do(req)
 	if err != nil {
-		return "", nil, fmt.Errorf("request failed: %w", err)
+		return "", nil, "", fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -671,10 +791,10 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 
 		// Check for context overflow
 		if isContextOverflowError(resp.StatusCode, bodyStr) {
-			return "", nil, fmt.Errorf("context overflow: API error (status %d): %s", resp.StatusCode, bodyStr)
+			return "", nil, "", fmt.Errorf("context overflow: API error (status %d): %s", resp.StatusCode, bodyStr)
 		}
 
-		return "", nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, bodyStr)
+		return "", nil, "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, bodyStr)
 	}
 
 	var apiResult struct {
@@ -686,38 +806,49 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
+			PromptTokensDetails *struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details,omitempty"`
 		} `json:"usage"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&apiResult); err != nil {
-		return "", nil, fmt.Errorf("failed to decode response: %w", err)
+		return "", nil, "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	// Track actual token usage for adaptive context management
 	if apiResult.Usage != nil && apiResult.Usage.PromptTokens > 0 {
 		r.lastPromptTokens = apiResult.Usage.PromptTokens
 		fillPct := float64(apiResult.Usage.PromptTokens) / float64(r.contextWindow) * 100
-		log.Printf("[DAEMON %s] Token usage: %d prompt / %d completion (%.0f%% of %d context)",
-			r.instance.RoleLabel, apiResult.Usage.PromptTokens, apiResult.Usage.CompletionTokens,
-			fillPct, r.contextWindow)
+		cached := 0
+		if apiResult.Usage.PromptTokensDetails != nil {
+			cached = apiResult.Usage.PromptTokensDetails.CachedTokens
+		}
+		if cached > 0 {
+			cachePct := float64(cached) / float64(apiResult.Usage.PromptTokens) * 100
+			log.Printf("[DAEMON %s] Token usage: %d prompt (💾 %d cached, %.0f%% hit) / %d completion (%.0f%% of %d context)",
+				r.instance.RoleLabel, apiResult.Usage.PromptTokens, cached, cachePct,
+				apiResult.Usage.CompletionTokens, fillPct, r.contextWindow)
+		} else {
+			log.Printf("[DAEMON %s] Token usage: %d prompt / %d completion (%.0f%% of %d context)",
+				r.instance.RoleLabel, apiResult.Usage.PromptTokens, apiResult.Usage.CompletionTokens,
+				fillPct, r.contextWindow)
+		}
 	}
 
 	if len(apiResult.Choices) == 0 {
-		return "", nil, fmt.Errorf("no choices in response")
+		return "", nil, "", fmt.Errorf("no choices in response")
 	}
 
 	choice := apiResult.Choices[0]
 	content := choice.Message.Content
 	toolCalls := choice.Message.ToolCalls
+	finishReason := choice.FinishReason
 
-	if len(toolCalls) > 0 {
-		return content, toolCalls, nil
-	}
-
-	return content, nil, nil
+	return content, toolCalls, finishReason, nil
 }
 
 // ── Tool Execution ─────────────────────────────────────────────────
@@ -728,6 +859,24 @@ func (r *DaemonRunner) executeTool(ctx context.Context, toolName string, argsJSO
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("Error parsing arguments: %v", err)
 	}
+
+	// Pre-tool hooks: same dispatcher as chat. Hooks can mutate args (e.g.
+	// redact secrets) or deny the call by returning Allow=false.
+	if dec := tools.RunPreToolHooks(toolName, args); !dec.Allow {
+		reason := dec.Reason
+		if reason == "" {
+			reason = "blocked by policy"
+		}
+		return reason
+	}
+	hookStart := time.Now()
+	defer func() {
+		// PostToolUse hooks don't get the result here because the function
+		// has many return paths; the audit log hook still records duration
+		// via this defer wrapper. For result-rewrite hooks the chat path
+		// is the source of truth; daemon results are forwarded as-is.
+		_ = tools.RunPostToolHooks(toolName, args, "", time.Since(hookStart), nil)
+	}()
 
 	// Check if this is an MCP tool (user's local client) or a built-in tool
 	tool, exists := r.toolRegistry.GetUserTool(r.userID, toolName)
@@ -759,6 +908,19 @@ func (r *DaemonRunner) executeTool(ctx context.Context, toolName string, argsJSO
 		credentialID := r.toolService.GetCredentialForTool(ctx, r.userID, toolName)
 		if credentialID != "" {
 			args["credential_id"] = credentialID
+		}
+	}
+
+	// Nexus artifact-handoff tools: inject a session-scoped adapter so
+	// produce/list/read all operate inside this orchestration only. We
+	// only wire this when the artifact store is present (Mongo + Nexus
+	// enabled); otherwise the tools surface a clear error.
+	if (toolName == "produce_artifact" || toolName == "list_artifacts" || toolName == "read_artifact") && r.artifactStore != nil {
+		args[tools.NexusArtifactAccessKey] = &nexusArtifactToolAdapter{
+			store:     r.artifactStore,
+			userID:    r.userID,
+			sessionID: r.instance.SessionID,
+			daemonID:  r.instance.ID,
 		}
 	}
 

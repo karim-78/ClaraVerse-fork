@@ -59,7 +59,7 @@ func (h *ComposioAuthHandler) InitiateGoogleSheetsAuth(c *fiber.Ctx) error {
 		})
 	}
 
-	// Use ClaraVerse user ID as Composio entity ID for simplicity
+	// Use DobbyAI user ID as Composio entity ID for simplicity
 	entityID := userID
 
 	// Validate and sanitize redirect URL
@@ -451,7 +451,7 @@ func (h *ComposioAuthHandler) InitiateGmailAuth(c *fiber.Ctx) error {
 		})
 	}
 
-	// Use ClaraVerse user ID as Composio entity ID
+	// Use DobbyAI user ID as Composio entity ID
 	entityID := userID
 
 	// Validate and sanitize redirect URL
@@ -597,7 +597,7 @@ func (h *ComposioAuthHandler) InitiateLinkedInAuth(c *fiber.Ctx) error {
 		})
 	}
 
-	// Use ClaraVerse user ID as Composio entity ID
+	// Use DobbyAI user ID as Composio entity ID
 	entityID := userID
 
 	// Validate and sanitize redirect URL

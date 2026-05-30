@@ -18,7 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// RoutineService manages Clara's Claw routines
+// RoutineService manages Dobby's Claw routines
 type RoutineService struct {
 	mongoDB      *database.MongoDB
 	redisService *RedisService
@@ -305,7 +305,7 @@ func (s *RoutineService) TestRoutine(ctx context.Context, userID string, req *mo
 	}
 
 	systemPrompt := fmt.Sprintf(
-		"You are Clara, an AI assistant executing a scheduled routine. "+
+		"You are Dobby, an AI assistant executing a scheduled routine. "+
 			"Execute the following task and provide a clear, concise result. "+
 			"The current time is %s. Routine name: %s.",
 		time.Now().Format(time.RFC1123),
@@ -356,7 +356,7 @@ func (s *RoutineService) TestRoutine(ctx context.Context, userID string, req *mo
 	return result, nil
 }
 
-// GetUserStatus returns the combined Clara's Claw status for a user
+// GetUserStatus returns the combined Dobby's Claw status for a user
 func (s *RoutineService) GetUserStatus(ctx context.Context, userID string, channelSvc *ChannelService, mcpSvc *MCPBridgeService) map[string]interface{} {
 	status := map[string]interface{}{
 		"setupComplete": false,
@@ -512,7 +512,7 @@ func (s *RoutineService) executeRoutine(routine *models.Routine) {
 	} else if s.chatService != nil {
 		// Build system prompt for routine execution
 		systemPrompt := fmt.Sprintf(
-			"You are Clara, an AI assistant executing a scheduled routine. "+
+			"You are Dobby, an AI assistant executing a scheduled routine. "+
 				"Execute the following task and provide a clear, concise result. "+
 				"The current time is %s. Routine name: %s.",
 			time.Now().Format(time.RFC1123),

@@ -19,6 +19,11 @@ type ClientMessage struct {
 	Attachments        []MessageAttachment      `json:"attachments,omitempty"`         // File attachments (images, documents)
 	DisableTools       bool                     `json:"disable_tools,omitempty"`       // Disable tools for this message (e.g., agent builder)
 	SelectedTools      []string                 `json:"selected_tools,omitempty"`      // If set, only use these tools (by name)
+	// ReasoningEffort hints at how much reasoning the model should spend on
+	// this turn. Forwarded to providers that honor it (gpt-oss "low|medium|high",
+	// OpenAI o-series same set, Anthropic via thinking.budget_tokens — mapped
+	// in chat_service before send). Empty string means provider default.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
 	// Interactive prompt response fields
 	PromptID string                      `json:"prompt_id,omitempty"` // ID of the prompt being responded to
@@ -85,6 +90,7 @@ type ServerMessage struct {
 	Arguments       map[string]interface{} `json:"arguments,omitempty"`
 	Result          string                 `json:"result,omitempty"`
 	Plots           []PlotData             `json:"plots,omitempty"`           // Visualization plots from E2B tools
+	DataFrames      []DataFrameData        `json:"dataframes,omitempty"`      // Pandas DataFrames emitted via display_df()
 	ConversationID  string                 `json:"conversation_id,omitempty"`
 	Tokens          *TokenUsage            `json:"tokens,omitempty"`
 	ErrorCode       string                 `json:"code,omitempty"`
@@ -107,10 +113,29 @@ type PlotData struct {
 	Data   string `json:"data"`   // Base64-encoded image data
 }
 
-// TokenUsage represents token consumption statistics
+// DataFrameData mirrors the frontend DataPreview shape — what the
+// DataTablePreview component already knows how to render. Emitted by the
+// Python sandbox when the model calls display_df(df).
+type DataFrameData struct {
+	Name     string     `json:"name,omitempty"`
+	Headers  []string   `json:"headers"`
+	Rows     [][]string `json:"rows"`
+	RowCount int        `json:"row_count"`
+	ColCount int        `json:"col_count"`
+}
+
+// TokenUsage represents token consumption statistics.
+// Cached + DurationMs + EstimatedCostUSD are populated by the chat stream's
+// SSE final-event parser and surfaced inline below each assistant message
+// (the "cost chip"). EstimatedCostUSD is best-effort: zero when we don't
+// have a price entry for the model.
 type TokenUsage struct {
-	Input  int `json:"input"`
-	Output int `json:"output"`
+	Input            int     `json:"input"`
+	Output           int     `json:"output"`
+	Cached           int     `json:"cached,omitempty"`
+	DurationMs       int     `json:"duration_ms,omitempty"`
+	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
+	Model            string  `json:"model,omitempty"`
 }
 
 // PromptWaiterFunc is a function type that waits for a prompt response
@@ -131,6 +156,7 @@ type UserConnection struct {
 	SystemInstructions string           // Optional: User-provided system prompt override
 	DisableTools       bool             // Disable tools for this connection (e.g., agent builder)
 	SelectedTools      []string         // If set, only use these tools (by name)
+	ReasoningEffort    string           // "low" | "medium" | "high" hint to the provider; empty = provider default
 	CreatedAt          time.Time
 	WriteChan          chan ServerMessage
 	StopChan           chan bool
@@ -178,9 +204,18 @@ func (uc *UserConnection) IsClosed() bool {
 
 // ChatRequest represents a request to OpenAI-compatible chat completion API
 type ChatRequest struct {
-	Model       string                   `json:"model"`
-	Messages    []map[string]interface{} `json:"messages"`
-	Tools       []map[string]interface{} `json:"tools,omitempty"`
-	Stream      bool                     `json:"stream"`
-	Temperature float64                  `json:"temperature,omitempty"`
+	Model    string                   `json:"model"`
+	Messages []map[string]interface{} `json:"messages"`
+	Tools    []map[string]interface{} `json:"tools,omitempty"`
+	Stream   bool                     `json:"stream"`
+	// ParallelToolCalls tells the provider it may emit multiple tool_calls
+	// in one assistant turn (OpenAI/Anthropic/Bedrock default to true).
+	// Pointer so omitempty drops it for providers that reject unknown fields.
+	ParallelToolCalls *bool   `json:"parallel_tool_calls,omitempty"`
+	Temperature       float64 `json:"temperature,omitempty"`
+	// ReasoningEffort is a hint to the provider for how much reasoning to spend.
+	// Accepted values: "low" | "medium" | "high" (gpt-oss, OpenAI o-series).
+	// Anthropic/Bedrock-Claude get this mapped to a thinking budget elsewhere.
+	// Empty string is omitted from the request (provider default).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }

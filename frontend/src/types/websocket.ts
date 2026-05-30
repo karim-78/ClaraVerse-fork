@@ -1,4 +1,4 @@
-// WebSocket message types for ClaraVerse backend
+// WebSocket message types for DobbyAI backend
 
 // Model types
 export interface Model {
@@ -177,6 +177,18 @@ export interface PlotData {
   data: string; // Base64-encoded image data
 }
 
+// DataFrameData mirrors models.DataFrameData on the backend — emitted by
+// the Python sandbox when the model calls display_df(df). Shaped to be
+// drop-in compatible with the DataPreview / DataTablePreview component
+// already used for uploaded CSV previews.
+export interface DataFrameData {
+  name?: string;
+  headers: string[];
+  rows: string[][];
+  row_count: number;
+  col_count: number;
+}
+
 export interface ToolResultMessage {
   type: 'tool_result';
   tool_name: string;
@@ -185,15 +197,22 @@ export interface ToolResultMessage {
   status: 'completed' | 'failed';
   result: string;
   plots?: PlotData[]; // Visualization plots from E2B tools
+  dataframes?: DataFrameData[]; // Tabular artifacts from display_df()
+}
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cached?: number;
+  duration_ms?: number;
+  estimated_cost_usd?: number;
+  model?: string;
 }
 
 export interface StreamEndMessage {
   type: 'stream_end';
   conversation_id?: string;
-  tokens?: {
-    input: number;
-    output: number;
-  };
+  tokens?: TokenUsage;
 }
 
 export interface ConversationTitleMessage {

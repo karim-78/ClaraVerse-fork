@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -178,9 +179,12 @@ func (h *WebhookTriggerHandler) executeWorkflow(executionID primitive.ObjectID, 
 		}
 	}()
 
-	// Execute
+	// Execute. Forward executionID + userID so the durable state store
+	// can checkpoint, dedupe retries, and resume after a crash.
 	execOptions := &execution.ExecutionOptions{
 		EnableBlockChecker: false, // Disabled for webhook triggers
+		ExecutionID:        executionID.Hex(),
+		UserID:             userID,
 	}
 
 	result, err := h.workflowEngine.ExecuteWithOptions(ctx, workflow, input, statusChan, execOptions)
@@ -224,10 +228,23 @@ func (h *WebhookTriggerHandler) executeSyncWorkflow(c *fiber.Ctx, executionID pr
 
 	execOptions := &execution.ExecutionOptions{
 		EnableBlockChecker: false,
+		ExecutionID:        executionID.Hex(),
+		UserID:             userID,
 	}
 
 	result, err := h.workflowEngine.ExecuteWithOptions(ctx, workflow, input, statusChan, execOptions)
 	close(statusChan)
+
+	// Per-workflow concurrency cap: convert limiter rejection into a 429
+	// with Retry-After so the upstream client backs off rather than retrying
+	// in a tight loop.
+	if limErr, ok := err.(*execution.LimiterError); ok {
+		c.Set("Retry-After", fmt.Sprintf("%d", int(limErr.RetryAfter.Seconds())))
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error":  "workflow at concurrency cap",
+			"detail": limErr.Error(),
+		})
+	}
 
 	// Update execution record
 	if h.executionService != nil && !executionID.IsZero() {

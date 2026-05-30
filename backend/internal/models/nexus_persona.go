@@ -6,7 +6,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// PersonaFact represents a single personality/character trait for Clara
+// PersonaFact represents a single personality/character trait for Dobby
 type PersonaFact struct {
 	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID          string             `bson:"userId" json:"user_id"`
@@ -27,7 +27,7 @@ func DefaultPersonaFacts(userID string) []PersonaFact {
 			ID:         primitive.NewObjectID(),
 			UserID:     userID,
 			Category:   "personality",
-			Content:    "Clara is helpful, proactive, and action-oriented",
+			Content:    "Dobby is helpful, proactive, and action-oriented",
 			Confidence: 1.0,
 			Source:     "default",
 			CreatedAt:  now,
@@ -37,7 +37,7 @@ func DefaultPersonaFacts(userID string) []PersonaFact {
 			ID:         primitive.NewObjectID(),
 			UserID:     userID,
 			Category:   "communication",
-			Content:    "Clara communicates concisely and clearly, avoiding unnecessary verbosity",
+			Content:    "Dobby communicates concisely and clearly, avoiding unnecessary verbosity",
 			Confidence: 1.0,
 			Source:     "default",
 			CreatedAt:  now,
@@ -47,7 +47,7 @@ func DefaultPersonaFacts(userID string) []PersonaFact {
 			ID:         primitive.NewObjectID(),
 			UserID:     userID,
 			Category:   "boundaries",
-			Content:    "Clara stays focused on the task at hand and asks for clarification when needed",
+			Content:    "Dobby stays focused on the task at hand and asks for clarification when needed",
 			Confidence: 1.0,
 			Source:     "default",
 			CreatedAt:  now,

@@ -28,6 +28,7 @@ import { ImageGalleryModal, type GalleryImage } from './ImageGalleryModal';
 import { RetryDropdown } from './RetryDropdown';
 import { VersionNavigator } from './VersionNavigator';
 import { ArtifactRenderer } from './ArtifactRenderer';
+import { DataTablePreview } from './DataTablePreview';
 import { getIconByName } from '@/utils/iconMapper';
 import { api } from '@/services/api';
 import { CustomSpinner } from '@/components/ui';
@@ -1267,9 +1268,27 @@ function AssistantMessageComponent({
       );
     }
 
-    // Render plots (for other tools like analyze_data, run_python)
+    // Render plots + dataframes (for other tools like analyze_data, run_python).
+    // Dataframes come from display_df() calls inside the sandbox and use the
+    // same DataTablePreview component as uploaded-CSV previews.
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+        {tool.dataframes && tool.dataframes.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            {tool.dataframes.map((df, dfIdx) => (
+              <DataTablePreview
+                key={`df-${tool.id}-${dfIdx}`}
+                filename={df.name || `dataframe_${dfIdx + 1}`}
+                preview={{
+                  headers: df.headers,
+                  rows: df.rows,
+                  row_count: df.row_count,
+                  col_count: df.col_count,
+                }}
+              />
+            ))}
+          </div>
+        )}
         {tool.plots && tool.plots.length > 0 && (
           <button
             onClick={() => {
@@ -1498,6 +1517,51 @@ function AssistantMessageComponent({
                 onNavigate={direction => onVersionNavigate(message.id, direction)}
               />
             )}
+            {/* Cost chip — tokens, cache hit %, duration, $ (when known) */}
+            {message.usage && (() => {
+              const u = message.usage;
+              const tokensTotal = (u.input ?? 0) + (u.output ?? 0);
+              const cachePct = u.input && u.cached
+                ? Math.round((u.cached / u.input) * 100)
+                : 0;
+              const fmtTokens = (n: number) =>
+                n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+              const fmtCost = (c: number) => {
+                if (c >= 0.01) return `$${c.toFixed(3)}`;
+                if (c >= 0.001) return `$${c.toFixed(4)}`;
+                return `<$0.001`;
+              };
+              const fmtDuration = (ms: number) =>
+                ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+              const parts: string[] = [];
+              if (u.estimated_cost_usd && u.estimated_cost_usd > 0) {
+                parts.push(fmtCost(u.estimated_cost_usd));
+              }
+              parts.push(`${fmtTokens(tokensTotal)} tok`);
+              if (cachePct > 0) parts.push(`${cachePct}% cached`);
+              if (u.duration_ms && u.duration_ms > 0) parts.push(fmtDuration(u.duration_ms));
+              return (
+                <span
+                  title={`Input: ${u.input} · Output: ${u.output}${u.cached ? ` · Cached: ${u.cached}` : ''}${u.model ? ` · Model: ${u.model}` : ''}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '4px 10px',
+                    height: 28,
+                    fontSize: '0.75rem',
+                    color: 'var(--color-text-secondary)',
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: 'var(--radius-full)',
+                    fontVariantNumeric: 'tabular-nums',
+                    cursor: 'default',
+                  }}
+                >
+                  {parts.join(' · ')}
+                </span>
+              );
+            })()}
             {/* Sources Button - ChatGPT style with stacked favicons */}
             {sources.length > 0 && (
               <>

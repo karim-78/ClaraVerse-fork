@@ -65,10 +65,14 @@ func recoverBlock(
 	completedCond.L.Unlock()
 }
 
-// WorkflowEngine executes workflows as DAGs with parallel execution
+// WorkflowEngine executes workflows as DAGs with parallel execution.
+// Optionally durable: when stateStore is set, every block's output is
+// checkpointed to storage after completion, retries return cached results,
+// and crashes can be resumed from the last checkpoint.
 type WorkflowEngine struct {
 	registry     *ExecutorRegistry
 	blockChecker *BlockChecker
+	stateStore   StateStore // nil = ephemeral (legacy behaviour)
 }
 
 // NewWorkflowEngine creates a new workflow engine
@@ -87,6 +91,14 @@ func NewWorkflowEngineWithChecker(registry *ExecutorRegistry, providerService *s
 // SetBlockChecker allows setting the block checker after creation
 func (e *WorkflowEngine) SetBlockChecker(checker *BlockChecker) {
 	e.blockChecker = checker
+}
+
+// SetStateStore enables durable execution. When set, every block's output
+// is checkpointed to storage as it completes, retries within the same
+// execution return cached output (idempotency), and crashed executions can
+// be resumed via ResumeExecution. Pass nil to opt out (legacy ephemeral mode).
+func (e *WorkflowEngine) SetStateStore(s StateStore) {
+	e.stateStore = s
 }
 
 // ExecutionResult contains the final result of a workflow execution
@@ -112,6 +124,18 @@ type ExecutionOptions struct {
 	// Checkpoint is called after each block completes to persist state.
 	// If nil, no checkpointing is performed.
 	Checkpoint CheckpointFunc
+	// ExecutionID identifies this run for the durable state store. When set
+	// + the engine has a state store wired (SetStateStore), each block's
+	// output is checkpointed, retries return cached output, and a crash
+	// can be resumed via ResumeExecution. Empty = ephemeral (legacy).
+	ExecutionID string
+	// UserID is recorded on the durable execution state so orphan detection
+	// at startup can report ownership. Optional; safe to leave empty.
+	UserID string
+	// Resuming hints that this execution was started before and is now
+	// being continued after a crash. Engine will skip blocks whose outputs
+	// it finds in the state store instead of re-running them.
+	Resuming bool
 }
 
 // Execute runs a workflow and streams updates via the statusChan
@@ -134,6 +158,66 @@ func (e *WorkflowEngine) ExecuteWithOptions(
 	options *ExecutionOptions,
 ) (*ExecutionResult, error) {
 	log.Printf("🚀 [ENGINE] Starting workflow execution with %d blocks", len(workflow.Blocks))
+
+	// Per-workflow concurrency cap. Prevents a misconfigured webhook from
+	// spawning unbounded simultaneous runs of the same workflow_id and
+	// self-DoS-ing the backend (sandboxes, LLM keys, MCP connections all
+	// get exhausted). Acquire returns immediately if at cap — caller's
+	// 429 handling converts this to an HTTP response with Retry-After.
+	limiter := DefaultLimiter()
+	if err := limiter.Acquire(workflow.ID); err != nil {
+		log.Printf("🚦 [ENGINE] Concurrency cap hit for workflow %s — rejecting", workflow.ID)
+		return nil, err
+	}
+	defer limiter.Release(workflow.ID)
+
+	// Pull options into locals so we can reference them with nil-safe
+	// defaults below.
+	executionID := ""
+	userID := ""
+	resuming := false
+	if options != nil {
+		executionID = options.ExecutionID
+		userID = options.UserID
+		resuming = options.Resuming
+	}
+
+	// Open the root OpenTelemetry span for this execution. Every block
+	// becomes a child span via ExecuteBlockWithTracing. If no tracer is
+	// configured (TracingEnabled=false), this is a no-op stub.
+	ctx, rootSpan := StartExecutionSpan(ctx, executionID, workflow.ID, userID, len(workflow.Blocks))
+	defer rootSpan.End()
+
+	// Durable execution bootstrap. When stateStore is wired AND we have an
+	// executionID, write the initial state (idempotent — Resuming will see
+	// the existing doc and keep its block_outputs) and start a heartbeat
+	// goroutine that pings every 10s so orphan detection on restart can
+	// distinguish "still running" from "crashed mid-flight".
+	if e.stateStore != nil && executionID != "" {
+		if err := e.stateStore.Init(ctx, executionID, workflow.ID, userID, workflow, input); err != nil {
+			log.Printf("⚠️ [ENGINE] state store init failed (continuing ephemeral): %v", err)
+		} else {
+			stopHeartbeat := make(chan struct{})
+			defer close(stopHeartbeat)
+			go func() {
+				ticker := time.NewTicker(HeartbeatInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-stopHeartbeat:
+						return
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						_ = e.stateStore.Heartbeat(context.Background(), executionID)
+					}
+				}
+			}()
+			if resuming {
+				log.Printf("🔄 [ENGINE] Resuming execution %s — checkpointed blocks will be skipped", executionID)
+			}
+		}
+	}
 
 	// Workflow-level timeout: prevents runaway workflows from running forever.
 	// Default 10 minutes, configurable per-workflow via WorkflowTimeout field.
@@ -375,9 +459,9 @@ func (e *WorkflowEngine) ExecuteWithOptions(
 		})
 
 		// Get executor for this block type
-		executor, execErr := e.registry.Get(block.Type)
-		if execErr != nil {
-			handleBlockError(blockID, block.Name, execErr, blockStates, &statesMu, statusChan, &executionErrors, &errorsMu)
+		executor, lookupErr := e.registry.Get(block.Type)
+		if lookupErr != nil {
+			handleBlockError(blockID, block.Name, lookupErr, blockStates, &statesMu, statusChan, &executionErrors, &errorsMu)
 			completedMu.Lock()
 			failedBlocks[blockID] = true
 			completedCond.Broadcast()
@@ -404,8 +488,46 @@ func (e *WorkflowEngine) ExecuteWithOptions(
 		blockCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		// Execute the block (with optional retries)
-		output, execErr := executor.Execute(blockCtx, block, blockInputs)
+		// Idempotency cache (#2): if this block already completed under
+		// this execution (e.g. we crashed after CheckpointBlock but before
+		// notifying downstream blocks; or this is a Resuming run), return
+		// the prior output instead of re-executing. Critical for
+		// side-effecting blocks (HTTP POST, email, payment) — they must
+		// fire exactly once per execution.
+		var (
+			output        map[string]any
+			execErr       error
+			servedFromCkpt bool
+		)
+		if e.stateStore != nil && executionID != "" {
+			cached, hit, err := e.stateStore.GetBlockOutput(blockCtx, executionID, blockID)
+			if err != nil {
+				log.Printf("⚠️ [ENGINE] cache lookup failed for block %s (proceeding): %v", blockID, err)
+			} else if hit && cached.Error == "" {
+				inputHash := HashBlockInput(blockInputs)
+				if cached.InputHash == "" || cached.InputHash == inputHash {
+					output = cached.Output
+					servedFromCkpt = true
+					log.Printf("⏩ [ENGINE] Block '%s' served from checkpoint (skipping re-execution)", block.Name)
+				} else {
+					log.Printf("⚠️ [ENGINE] Block '%s' has cached output but input hash differs — re-executing", block.Name)
+				}
+			}
+		}
+
+		// Open a child span for the block. Includes block_id, type, name,
+		// and whether the work was actually performed or cache-served. Span
+		// ends after retries + checkpoint so the duration reflects user-
+		// observed latency.
+		blockCtx, blockSpan := StartBlockSpan(blockCtx, block.ID, block.Type, block.Name, servedFromCkpt)
+		defer blockSpan.End()
+
+		// Execute the block (with optional retries) — only if we didn't
+		// already have a cached output.
+		blockStart := time.Now()
+		if !servedFromCkpt {
+			output, execErr = executor.Execute(blockCtx, block, blockInputs)
+		}
 
 		// Retry logic: if block has RetryConfig and error is retryable, retry with backoff
 		if execErr != nil && block.RetryConfig != nil && block.RetryConfig.MaxRetries > 0 {
@@ -592,7 +714,28 @@ func (e *WorkflowEngine) ExecuteWithOptions(
 		blockStates[blockID].Outputs = output
 		statesMu.Unlock()
 
-		// Checkpoint: persist block completion for crash recovery
+		// Durable checkpoint (#1 + #2). Skip when we served from cache —
+		// the data is already there. This is the single most important
+		// line in the durability layer: after this write succeeds, a
+		// crash before the next block notifies will resume from here
+		// instead of re-running this block. Failure to checkpoint is
+		// logged but NOT fatal — we'd rather complete the workflow than
+		// abort on a transient mongo blip.
+		if e.stateStore != nil && executionID != "" && !servedFromCkpt {
+			ckpt := BlockCheckpoint{
+				Output:      output,
+				InputHash:   HashBlockInput(blockInputs),
+				CompletedAt: time.Now().UTC(),
+				DurationMs:  time.Since(blockStart).Milliseconds(),
+			}
+			if cerr := e.stateStore.CheckpointBlock(context.Background(), executionID, blockID, ckpt); cerr != nil {
+				log.Printf("⚠️ [ENGINE] checkpoint write failed for block %s (continuing): %v", blockID, cerr)
+			}
+		}
+
+		// Legacy ad-hoc checkpoint hook (kept for backwards-compat with
+		// existing callers; will be removed when they migrate to the
+		// state store).
 		if options != nil && options.Checkpoint != nil {
 			options.Checkpoint(blockID, "completed", output)
 		}
@@ -984,12 +1127,61 @@ func (e *WorkflowEngine) ExecuteWithOptions(
 	log.Printf("🏁 [ENGINE] Workflow execution %s: %d completed, %d failed",
 		finalStatus, completedCount, failedCount)
 
+	// Finalise the durable state. We attach the final status so the orphan
+	// scanner stops considering this execution. completed_at also drives
+	// the 30-day TTL prune on the state collection.
+	if e.stateStore != nil && executionID != "" {
+		status := StateStatusCompleted
+		if finalStatus != "completed" {
+			status = StateStatusFailed
+		}
+		if cerr := e.stateStore.MarkCompleted(context.Background(), executionID, status); cerr != nil {
+			log.Printf("⚠️ [ENGINE] mark completed failed for %s: %v", executionID, cerr)
+		}
+	}
+	if errorMsg != "" {
+		AnnotateSpanError(rootSpan, errorMsg)
+	}
+
 	return &ExecutionResult{
 		Status:      finalStatus,
 		Output:      finalOutput,
 		BlockStates: blockStates,
 		Error:       errorMsg,
 	}, nil
+}
+
+// ResumeExecution restarts an interrupted execution from its checkpoints.
+// Called on startup for each orphan reported by stateStore.FindOrphaned —
+// loads the workflow snapshot from the state doc and re-runs the engine
+// with Resuming=true. Already-completed blocks come straight from the
+// idempotency cache so we don't redo work or re-fire side effects.
+//
+// Operates on a fresh background context: the original caller is long
+// gone. statusChan is buffered + drained-and-discarded — we don't have a
+// WebSocket to stream to during recovery.
+func (e *WorkflowEngine) ResumeExecution(ctx context.Context, state ExecutionState) (*ExecutionResult, error) {
+	if e.stateStore == nil {
+		return nil, fmt.Errorf("state store not configured — cannot resume")
+	}
+	if state.WorkflowSnapshot == nil {
+		return nil, fmt.Errorf("execution %s has no workflow snapshot — unrecoverable", state.ExecutionID)
+	}
+	log.Printf("🔁 [ENGINE] Resuming %s (%d blocks checkpointed)", state.ExecutionID, len(state.BlockOutputs))
+
+	// Drain channel: nobody's listening on the other side; we still need
+	// trySend to be non-blocking.
+	statusChan := make(chan models.ExecutionUpdate, 256)
+	go func() {
+		for range statusChan {
+		}
+	}()
+
+	return e.ExecuteWithOptions(ctx, state.WorkflowSnapshot, state.InitialInput, statusChan, &ExecutionOptions{
+		ExecutionID: state.ExecutionID,
+		UserID:      state.UserID,
+		Resuming:    true,
+	})
 }
 
 // handleBlockError handles block execution errors with classification for debugging

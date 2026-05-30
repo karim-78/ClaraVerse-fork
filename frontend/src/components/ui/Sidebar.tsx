@@ -294,7 +294,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <header className={styles.header}>
           {!isCollapsed && (
             <div className={styles.brandContainer}>
-              <img src={faviconIcon} alt="Clara logo" className={styles.brandIcon} />
+              <img src={faviconIcon} alt="Dobby logo" className={styles.brandIcon} />
               <span className={styles.brandName}>{brandName}</span>
             </div>
           )}

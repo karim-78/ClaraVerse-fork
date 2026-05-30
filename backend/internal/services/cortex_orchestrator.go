@@ -219,7 +219,7 @@ func (s *CortexService) HandleUserMessage(
 	systemPrompt, err := s.contextBuilder.BuildCortexSystemPrompt(execCtx, userID, recentMessages, activeDaemons, projectInstruction)
 	if err != nil {
 		log.Printf("[CORTEX] Failed to build system prompt for user %s: %v", userID, err)
-		systemPrompt = "You are Cortex, Clara's AI orchestrator."
+		systemPrompt = "You are Cortex, Dobby's AI orchestrator."
 	}
 
 	// 4. Classify the request
@@ -651,10 +651,22 @@ func (s *CortexService) handleMultiDaemonMode(
 		daemons[plan.Index] = daemon
 	}
 
-	s.orchestrateMultiDaemon(ctx, userID, sessionID, parentTask.ID, modelID, message, classification.Daemons, daemons, projectInstruction, parentTask.Source == "routine", skillIDs)
+	s.orchestrateMultiDaemon(ctx, userID, sessionID, parentTask.ID, modelID, message, classification.Daemons, daemons, projectInstruction, parentTask.Source == "routine", skillIDs, nil)
 }
 
-// orchestrateMultiDaemon manages the dependency-coordinated execution of multiple daemons
+// orchestrateMultiDaemon manages the dependency-coordinated execution of multiple daemons.
+//
+// Durability: when nexusOrchStore is set this:
+//   - Initializes a per-orchestration document at start (upsert).
+//   - Runs a heartbeat goroutine that pings the store every 10s.
+//   - Checkpoints each completed daemon's summary so a crashed backend
+//     can resume without re-running finished work.
+//   - Marks the orchestration completed (or failed/interrupted) at the end.
+//
+// resumeCompleted is non-nil on resume paths — pre-populates the completed
+// map and causes the launch loop to skip daemons whose work is already
+// recorded. Side-effects (engram writes, template stats, learnings) only
+// fire for daemons we actually re-launch, so resume is idempotent.
 func (s *CortexService) orchestrateMultiDaemon(
 	ctx context.Context,
 	userID string,
@@ -667,8 +679,45 @@ func (s *CortexService) orchestrateMultiDaemon(
 	projectInstruction string,
 	isRoutine bool,
 	skillIDs []primitive.ObjectID,
+	resumeCompleted map[int]*DaemonResult,
 ) {
+	// === Durability: init state + heartbeat ====================================
+	if s.nexusOrchStore != nil {
+		daemonIDs := make(map[string]primitive.ObjectID, len(daemons))
+		for idx, d := range daemons {
+			daemonIDs[fmt.Sprintf("%d", idx)] = d.ID
+		}
+		state := &NexusOrchestrationState{
+			SessionID:          sessionID,
+			UserID:             userID,
+			ParentTaskID:       parentTaskID,
+			ModelID:            modelID,
+			OriginalMessage:    originalMessage,
+			ProjectInstruction: projectInstruction,
+			IsRoutine:          isRoutine,
+			Plans:              plans,
+			DaemonIDs:          daemonIDs,
+			SkillIDs:           skillIDs,
+		}
+		if err := s.nexusOrchStore.Init(ctx, state); err != nil {
+			// Non-fatal — we lose crash-resume for this run but proceed normally.
+			log.Printf("[NEXUS-DURABILITY] state Init failed for task %s (non-fatal, run continues): %v",
+				parentTaskID.Hex(), err)
+		}
+
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		defer hbCancel()
+		go s.runOrchestrationHeartbeat(hbCtx, sessionID, parentTaskID)
+	}
+
 	completed := make(map[int]*DaemonResult)
+	if resumeCompleted != nil {
+		for k, v := range resumeCompleted {
+			completed[k] = v
+		}
+		log.Printf("[NEXUS-DURABILITY] Resuming task %s with %d daemon(s) already done",
+			parentTaskID.Hex(), len(completed))
+	}
 	pending := make(map[int]DaemonPlan)
 	var running int
 	var mu sync.Mutex
@@ -679,7 +728,13 @@ func (s *CortexService) orchestrateMultiDaemon(
 	var wg sync.WaitGroup
 
 	for _, plan := range plans {
-		if len(plan.DependsOn) == 0 {
+		// Skip daemons already completed in a previous (interrupted) run.
+		if _, done := completed[plan.Index]; done {
+			continue
+		}
+		// Deps may already be met on resume — promote into the "ready" tier.
+		depsMet := len(plan.DependsOn) == 0 || allDepsMet(plan.DependsOn, completed)
+		if depsMet {
 			if !s.acquireDaemonSlot(userID) {
 				s.publish(userID, "error", map[string]string{
 					"message": fmt.Sprintf("cannot deploy daemon %s: at capacity", plan.RoleLabel),
@@ -688,7 +743,17 @@ func (s *CortexService) orchestrateMultiDaemon(
 			}
 
 			daemon := daemons[plan.Index]
+			if daemon == nil {
+				log.Printf("[NEXUS-DURABILITY] daemon for plan index %d missing — skipping", plan.Index)
+				s.releaseDaemonSlot(userID)
+				continue
+			}
 			_ = s.sessionStore.AddActiveDaemon(ctx, userID, daemon.ID)
+
+			var depResults map[string]string
+			if len(plan.DependsOn) > 0 {
+				depResults = collectResults(plan.DependsOn, completed, plans)
+			}
 
 			s.publish(userID, "daemon_deployed", map[string]interface{}{
 				"daemon_id":    daemon.ID,
@@ -699,13 +764,21 @@ func (s *CortexService) orchestrateMultiDaemon(
 			})
 
 			wg.Add(1)
-			s.launchDaemon(ctx, userID, daemon, plan.Index, nil, originalMessage, updateChan, projectInstruction, skillIDs, &wg)
+			s.launchDaemon(ctx, userID, daemon, plan.Index, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg)
 			mu.Lock()
 			running++
 			mu.Unlock()
 		} else {
 			pending[plan.Index] = plan
 		}
+	}
+
+	// Edge case: a resume where every remaining daemon was already done →
+	// nothing launched, so go straight to synthesis.
+	if running == 0 && len(pending) == 0 {
+		close(updateChan)
+		s.finishOrchestration(ctx, userID, parentTaskID, modelID, completed, plans, isRoutine, NexusOrchStatusCompleted)
+		return
 	}
 
 	// Close updateChan when all daemon goroutines finish so the range loop terminates.
@@ -737,6 +810,21 @@ func (s *CortexService) orchestrateMultiDaemon(
 			_ = s.taskStore.SetResult(ctx, userID, daemon.TaskID, &models.NexusTaskResult{
 				Summary: update.Result.Summary,
 			})
+
+			// Durability checkpoint — survives crash so resume skips this daemon.
+			if s.nexusOrchStore != nil {
+				rec := CompletedDaemonRecord{
+					Index:     update.Index,
+					DaemonID:  daemon.ID.Hex(),
+					Role:      daemon.Role,
+					RoleLabel: daemon.RoleLabel,
+					Summary:   update.Result.Summary,
+				}
+				if err := s.nexusOrchStore.CheckpointDaemon(ctx, sessionID, parentTaskID, rec); err != nil {
+					log.Printf("[NEXUS-DURABILITY] checkpoint failed for daemon %d (non-fatal): %v",
+						update.Index, err)
+				}
+			}
 
 			// Track template stats + extract learnings
 			s.recordTemplateStats(ctx, userID, daemon.ID, true)
@@ -792,7 +880,126 @@ func (s *CortexService) orchestrateMultiDaemon(
 		}
 	}
 
+	// Decide terminal status: anything completed → completed; otherwise failed.
+	status := NexusOrchStatusCompleted
+	if len(completed) == 0 {
+		status = NexusOrchStatusFailed
+	}
+	s.finishOrchestration(ctx, userID, parentTaskID, modelID, completed, plans, isRoutine, status)
+}
+
+// runOrchestrationHeartbeat pings the state store every NexusOrchHeartbeatInterval
+// so the orphan scanner doesn't mistake a long-running orchestration for a crashed one.
+func (s *CortexService) runOrchestrationHeartbeat(
+	ctx context.Context,
+	sessionID, parentTaskID primitive.ObjectID,
+) {
+	if s.nexusOrchStore == nil {
+		return
+	}
+	tick := time.NewTicker(NexusOrchHeartbeatInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			// Use background context so a finishing parent ctx doesn't
+			// race the final heartbeat. The store write is cheap.
+			_ = s.nexusOrchStore.Heartbeat(context.Background(), sessionID, parentTaskID)
+		}
+	}
+}
+
+// finishOrchestration runs synthesis and then writes the terminal status to
+// the durability store, triggering the 14-day TTL prune.
+func (s *CortexService) finishOrchestration(
+	ctx context.Context,
+	userID string,
+	parentTaskID primitive.ObjectID,
+	modelID string,
+	completed map[int]*DaemonResult,
+	plans []DaemonPlan,
+	isRoutine bool,
+	status NexusOrchestrationStatus,
+) {
 	s.synthesizeResults(ctx, userID, parentTaskID, modelID, completed, plans, isRoutine)
+	if s.nexusOrchStore != nil {
+		// Find the session id for the mark-completed write. Cheapest way is to
+		// pull it from any daemon doc, but synthesizeResults already wrote the
+		// terminal task state, so we look it up by parentTaskID.
+		if task, err := s.taskStore.GetByID(context.Background(), userID, parentTaskID); err == nil && task != nil {
+			if err := s.nexusOrchStore.MarkCompleted(context.Background(), task.SessionID, parentTaskID, status); err != nil {
+				log.Printf("[NEXUS-DURABILITY] MarkCompleted failed for task %s (non-fatal): %v",
+					parentTaskID.Hex(), err)
+			}
+		}
+	}
+}
+
+// ResumeOrchestration re-enters orchestrateMultiDaemon for an interrupted
+// multi-daemon run. Called from main.go's startup orphan scan.
+//
+// Resume semantics:
+//   - DaemonIDs map identifies the daemon docs from the original run.
+//   - CompletedDaemons map skips re-running anything that finished before
+//     the crash. We rely on per-daemon recordTemplateStats + engram writes
+//     having fired at completion time, so resume does not re-fire them.
+//   - In-flight daemons (started but not checkpointed) get re-launched.
+//     This is safe for our typical daemons (LLM + read-mostly tools) and
+//     matches the workflow engine's idempotency posture.
+func (s *CortexService) ResumeOrchestration(ctx context.Context, state NexusOrchestrationState) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️ [NEXUS-RESUME] resume panicked for task %s: %v", state.ParentTaskID.Hex(), r)
+		}
+	}()
+	if s.nexusOrchStore == nil {
+		log.Printf("[NEXUS-RESUME] cannot resume task %s — orch store unavailable", state.ParentTaskID.Hex())
+		return
+	}
+
+	// Reload daemon docs by ID.
+	daemons := make(map[int]*models.Daemon, len(state.DaemonIDs))
+	for idxStr, did := range state.DaemonIDs {
+		var idx int
+		if _, err := fmt.Sscanf(idxStr, "%d", &idx); err != nil {
+			log.Printf("[NEXUS-RESUME] bad daemon index key %q: %v", idxStr, err)
+			continue
+		}
+		d, err := s.daemonPool.GetByID(ctx, state.UserID, did)
+		if err != nil || d == nil {
+			log.Printf("[NEXUS-RESUME] daemon %s (idx=%d) missing from pool, skipping", did.Hex(), idx)
+			continue
+		}
+		daemons[idx] = d
+	}
+
+	// Build pre-completed map from state checkpoints.
+	resumeCompleted := make(map[int]*DaemonResult, len(state.CompletedDaemons))
+	for _, rec := range state.CompletedDaemons {
+		r := rec // capture
+		resumeCompleted[r.Index] = &DaemonResult{Summary: r.Summary}
+	}
+
+	log.Printf("[NEXUS-RESUME] Resuming session=%s task=%s — %d plan(s), %d daemon(s) loaded, %d already completed",
+		state.SessionID.Hex(), state.ParentTaskID.Hex(),
+		len(state.Plans), len(daemons), len(resumeCompleted))
+
+	s.orchestrateMultiDaemon(
+		ctx,
+		state.UserID,
+		state.SessionID,
+		state.ParentTaskID,
+		state.ModelID,
+		state.OriginalMessage,
+		state.Plans,
+		daemons,
+		state.ProjectInstruction,
+		state.IsRoutine,
+		state.SkillIDs,
+		resumeCompleted,
+	)
 }
 
 // launchDaemon starts a daemon runner in a goroutine.
@@ -823,6 +1030,7 @@ func (s *CortexService) launchDaemon(
 		DaemonStore:     s.daemonPool,
 		ContextBuilder:  s.contextBuilder,
 		ToolSelector:    s.toolSelector,
+		ArtifactStore:   s.artifactStore,
 		DepResults:         depResults,
 		OriginalMessage:    originalMessage,
 		ProjectInstruction: projectInstruction,
@@ -1593,7 +1801,7 @@ func (s *CortexService) handleRetryDispatch(
 
 	systemPrompt, err := s.contextBuilder.BuildCortexSystemPrompt(execCtx, userID, recentMessages, activeDaemons, projectInstruction)
 	if err != nil {
-		systemPrompt = "You are Cortex, Clara's AI orchestrator."
+		systemPrompt = "You are Cortex, Dobby's AI orchestrator."
 	}
 
 	// Classify (may choose a different mode with error context)

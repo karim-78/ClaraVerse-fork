@@ -101,11 +101,14 @@ func (e *LLMExecutor) Execute(ctx context.Context, block models.Block, inputs ma
 	var actualModelID string
 	var err error
 
-	// Step 1: Try direct lookup in models table
-	provider, err = e.providerService.GetByModelID(modelID)
+	// Step 1: Try direct lookup in models table. Use the model's `name`
+	// column (the upstream API id) — NOT the row id, which carries a
+	// `<provider_id>:` prefix that Bedrock and other strict providers reject.
+	var resolvedName string
+	provider, resolvedName, err = e.providerService.GetByModelIDWithName(modelID)
 	if err == nil {
-		actualModelID = modelID
-		log.Printf("✅ [LLM-EXEC] Found model '%s' via direct lookup", modelID)
+		actualModelID = resolvedName
+		log.Printf("✅ [LLM-EXEC] Found model '%s' via direct lookup (api name: %s)", modelID, actualModelID)
 	} else {
 		// Step 2: Try model alias resolution
 		log.Printf("🔄 [LLM-EXEC] Model '%s' not found directly, trying alias resolution...", modelID)
@@ -266,6 +269,15 @@ func (e *LLMExecutor) Execute(ctx context.Context, block models.Block, inputs ma
 
 	log.Printf("✅ [LLM-EXEC] Block '%s': completed, response_len=%d, tokens=%d/%d",
 		block.Name, len(content), inputTokens, outputTokens)
+
+	// Attach token + cost to the current span so the trace viewer can
+	// roll up per-execution cost. block.cost_usd is the per-block dollar
+	// figure (0 when we don't have a price entry for this model — the
+	// viewer shows that as "(partial)" in the rollup).
+	if sp := currentSpan(ctx); sp != nil {
+		cost := EstimateBlockCostUSD(modelID, inputTokens, 0, outputTokens)
+		annotateBlockSpan(sp, modelID, inputTokens, outputTokens, cost)
+	}
 
 	// Parse JSON output if structured output was requested
 	if outputFormat == "json" {
@@ -569,7 +581,7 @@ func supportsStrictJSONSchema(providerName, baseURL string) bool {
 		return true
 	}
 
-	// ClaraVerse Cloud (private TEE) - Mixed results, use fallback for safety
+	// DobbyAI Cloud (private TEE) - Mixed results, use fallback for safety
 	// ✅ 100% compliance: Kimi-K2-Thinking-TEE, MiMo-V2-Flash
 	// ❌ 0% compliance: GLM-4.7-TEE (accepts strict mode but returns invalid JSON)
 	// Decision: Use fallback mode to ensure consistency across all models

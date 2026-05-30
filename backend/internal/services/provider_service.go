@@ -292,21 +292,29 @@ func matchesPattern(name, pattern string) bool {
 	return matched
 }
 
-// GetByModelID returns the provider associated with a given model ID
-func (s *ProviderService) GetByModelID(modelID string) (*models.Provider, error) {
+// GetByModelIDWithName returns both the provider and the model's `name`
+// column (the upstream API model identifier with no row-id prefix). Use this
+// in callers that need to forward the model name to a provider API — sending
+// the row id will fail at providers like Bedrock with "invalid model identifier".
+func (s *ProviderService) GetByModelIDWithName(modelID string) (*models.Provider, string, error) {
 	var providerID int
+	var modelName string
 	err := s.db.QueryRow(`
-		SELECT provider_id FROM models WHERE id = ?
-	`, modelID).Scan(&providerID)
+		SELECT provider_id, name FROM models WHERE id = ?
+	`, modelID).Scan(&providerID, &modelName)
 
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("model not found: %s", modelID)
+		return nil, "", fmt.Errorf("model not found: %s", modelID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to query model: %w", err)
+		return nil, "", fmt.Errorf("failed to query model: %w", err)
 	}
 
-	return s.GetByID(providerID)
+	provider, err := s.GetByID(providerID)
+	if err != nil {
+		return nil, "", err
+	}
+	return provider, modelName, nil
 }
 
 // GetAllIncludingDisabled returns all providers including disabled ones

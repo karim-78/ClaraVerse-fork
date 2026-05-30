@@ -240,7 +240,7 @@ export function NexusSidebar({
       isCollapsed ? (
         <div
           className={styles.bridgeStatusCompact}
-          title={bridgeConnected ? 'Clara Companion: Connected' : 'Clara Companion: Offline'}
+          title={bridgeConnected ? 'Dobby Companion: Connected' : 'Dobby Companion: Offline'}
         >
           <Terminal
             size={14}
@@ -262,7 +262,7 @@ export function NexusSidebar({
                   : styles.bridgeStatusIconDisconnected
               }`}
             />
-            <span className={styles.bridgeStatusLabel}>Clara Companion</span>
+            <span className={styles.bridgeStatusLabel}>Dobby Companion</span>
             <span className={styles.bridgeStatusValue}>
               {bridgeConnected ? 'Connected' : 'Offline'}
             </span>
@@ -272,7 +272,7 @@ export function NexusSidebar({
               Install &amp; run the companion:
               <code className={styles.bridgeSetupCode}>
                 curl -fsSL
-                https://gist.githubusercontent.com/claraverse-space/87a840d4a462c2787ce958691fa267b4/raw/install.sh
+                https://gist.githubusercontent.com/dobbyai-space/87a840d4a462c2787ce958691fa267b4/raw/install.sh
                 | bash
               </code>
             </div>

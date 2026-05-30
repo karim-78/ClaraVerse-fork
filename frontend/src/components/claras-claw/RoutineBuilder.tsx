@@ -346,10 +346,10 @@ export const RoutineBuilder = ({ editingId, onClose }: RoutineBuilderProps) => {
                   setPrompt(e.target.value);
                   setError(null);
                 }}
-                placeholder="Tell Clara what to do when this routine runs..."
+                placeholder="Tell Dobby what to do when this routine runs..."
               />
               <p className="claw-form-help">
-                Clara will execute these instructions with access to your enabled tools.
+                Dobby will execute these instructions with access to your enabled tools.
               </p>
             </div>
 

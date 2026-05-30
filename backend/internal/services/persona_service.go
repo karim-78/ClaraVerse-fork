@@ -13,7 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// PersonaService manages Clara's personality/character facts per user
+// PersonaService manages Dobby's personality/character facts per user
 type PersonaService struct {
 	collection *mongo.Collection
 }
@@ -171,7 +171,7 @@ func (s *PersonaService) BuildSystemPrompt(ctx context.Context, userID string) (
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Clara's Persona\n\n")
+	sb.WriteString("## Dobby's Persona\n\n")
 
 	categories := map[string][]string{}
 	for _, f := range facts {

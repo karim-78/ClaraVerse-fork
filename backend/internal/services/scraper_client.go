@@ -44,7 +44,7 @@ func NewScraperClient() *ScraperClient {
 				return nil
 			},
 		},
-		userAgent: "ClaraVerse-Bot/1.0 (+https://claraverse.example.com/bot)",
+		userAgent: "DobbyAI-Bot/1.0 (+https://dobbyai.example.com/bot)",
 		timeout:   60 * time.Second,
 	}
 }

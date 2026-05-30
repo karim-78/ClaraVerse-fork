@@ -1,8 +1,8 @@
-# ClaraVerse Design System v1.0
+# DobbyAI Design System v1.0
 
 ## Overview
 
-A production-ready design system for ClaraVerse featuring a premium dark theme with Rose Pink accent colors. Built with React, TypeScript, and CSS custom properties for maximum flexibility and type safety.
+A production-ready design system for DobbyAI featuring a premium dark theme with Rose Pink accent colors. Built with React, TypeScript, and CSS custom properties for maximum flexibility and type safety.
 
 ## Installation
 
@@ -328,4 +328,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Built with ❤️ for ClaraVerse by @badboysm890**
+**Built with ❤️ for DobbyAI by @badboysm890**

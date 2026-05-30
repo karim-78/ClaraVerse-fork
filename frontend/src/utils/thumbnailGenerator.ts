@@ -25,7 +25,7 @@ interface ThumbnailCacheSchema {
   };
 }
 
-const CACHE_DB_NAME = 'claraverse-thumbnails';
+const CACHE_DB_NAME = 'dobbyai-thumbnails';
 const CACHE_DB_VERSION = 1;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 

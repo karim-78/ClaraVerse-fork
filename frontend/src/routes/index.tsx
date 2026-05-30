@@ -26,6 +26,7 @@ import {
   Analytics,
   ModelManagement,
   UserManagement,
+  Traces,
   SystemModels,
   E2BSettings,
 } from '@/pages/admin';
@@ -221,6 +222,7 @@ const router = createBrowserRouter([
           { path: 'system-models', element: <SystemModels /> },
           { path: 'code-execution', element: <E2BSettings /> },
           { path: 'users', element: <UserManagement /> },
+          { path: 'traces', element: <Traces /> },
           { path: '', element: <Navigate to="dashboard" replace /> },
         ],
       },

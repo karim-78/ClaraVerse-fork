@@ -3,6 +3,7 @@ import { Brain, Info, AlertCircle, Loader2, Clock, TrendingUp, Trash2 } from 'lu
 import { useSettingsStore } from '@/store/useSettingsStore';
 import memoryService from '@/services/memoryService';
 import type { MemoryStats } from '@/services/memoryService';
+import { MemoryList } from './MemoryList';
 
 export interface MemorySectionProps {
   /** Callback when settings change */
@@ -111,7 +112,7 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
           Memory System
         </h2>
         <p className="text-sm text-gray-400 mt-1">
-          Configure how Clara remembers and recalls information from your conversations
+          Configure how Dobby remembers and recalls information from your conversations
         </p>
       </div>
 
@@ -124,7 +125,7 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
               Enable Memory System
             </h3>
             <p className="text-sm text-gray-400 mt-1">
-              Allow Clara to remember information from your conversations and use it in future chats
+              Allow Dobby to remember information from your conversations and use it in future chats
             </p>
 
             {/* Privacy Notice */}
@@ -134,7 +135,7 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
             >
               <Info className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
               <p className="text-xs text-gray-300">
-                All memories are encrypted with your user-specific key. Not even ClaraVerse
+                All memories are encrypted with your user-specific key. Not even DobbyAI
                 administrators can access your memories.
               </p>
             </div>
@@ -343,7 +344,7 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
                 <span className="text-gray-400 mt-0.5">•</span>
                 <span>
                   <strong>Extraction:</strong> After every {memoryExtractionThreshold} messages,
-                  Clara automatically extracts important information (preferences, facts, context).
+                  Dobby automatically extracts important information (preferences, facts, context).
                 </span>
               </li>
               <li className="flex items-start gap-2">
@@ -381,7 +382,7 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
           <Brain className="w-12 h-12 mx-auto mb-3 text-gray-600" />
           <p className="text-gray-400 mb-2">Memory system is currently disabled</p>
           <p className="text-sm text-gray-500">
-            Enable it above to let Clara remember and learn from your conversations
+            Enable it above to let Dobby remember and learn from your conversations
           </p>
         </div>
       )}
@@ -406,7 +407,7 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
                   </p>
                   <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 mb-4">
                     <p className="text-xs text-yellow-300">
-                      <strong>Warning:</strong> Clara will lose all learned information about your
+                      <strong>Warning:</strong> Dobby will lose all learned information about your
                       preferences, projects, and context. You'll start fresh.
                     </p>
                   </div>
@@ -441,6 +442,16 @@ export const MemorySection: React.FC<MemorySectionProps> = ({ onSave }) => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Browse / delete individual memories */}
+      {memoryEnabled && stats && stats.total_memories > 0 && (
+        <div
+          style={{ backgroundColor: '#0d0d0d' }}
+          className="rounded-lg p-6 border border-gray-700"
+        >
+          <MemoryList />
         </div>
       )}
     </div>

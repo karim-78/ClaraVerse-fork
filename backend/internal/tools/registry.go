@@ -462,6 +462,22 @@ func registerBuiltInTools(r *Registry) {
 	// Register interactive prompt tool
 	_ = r.Register(NewAskUserTool())
 
+	// Register subagent dispatch tool (2026 fan-out pattern). The concrete
+	// SubagentRunner is injected at execution time by chat_service.
+	_ = r.Register(NewSpawnSubagentTool())
+
+	// Model-callable memory tools (Anthropic memory-tool pattern). The
+	// MemoryAccess implementation is injected at execution time.
+	_ = r.Register(NewAddMemoryTool())
+	_ = r.Register(NewSearchMemoryTool())
+
+	// Nexus structured-artifact handoff tools. Available to daemons; the
+	// NexusArtifactAccess implementation is injected by cortex/daemon
+	// runner at execution time with session_id pre-bound.
+	_ = r.Register(NewProduceArtifactTool())
+	_ = r.Register(NewListArtifactsTool())
+	_ = r.Register(NewReadArtifactTool())
+
 	// Register 0G blockchain tools
 	_ = r.Register(NewZeroGTokenTransfersTool())
 	_ = r.Register(NewZeroGContractABITool())
@@ -567,7 +583,7 @@ func (r *Registry) GetUserTools(userID string) []map[string]interface{} {
 }
 
 // GetMCPTools returns ONLY the user's MCP tools (not built-in).
-// These are the tools registered by the user's desktop MCP client (Clara's Claw).
+// These are the tools registered by the user's desktop MCP client (Dobby's Claw).
 func (r *Registry) GetMCPTools(userID string) []map[string]interface{} {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()

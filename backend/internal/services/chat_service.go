@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"claraverse/internal/database"
@@ -59,6 +60,71 @@ type ContextSummary struct {
 	SummarizedCount  int       // Number of messages that were summarized
 	LastMessageIndex int       // Index of the last message that was summarized
 	CreatedAt        time.Time // When this summary was created
+}
+
+// harmonyStripper extracts <reasoning>...</reasoning> spans from a streaming
+// content channel. gpt-oss (the OpenAI Harmony response format on Bedrock)
+// emits its chain-of-thought inline inside the regular `content` delta wrapped
+// in <reasoning>...</reasoning> tags rather than the o1/o3 reasoning_content
+// channel — so without this, the tags leak verbatim to the chat UI.
+//
+// Each call returns (visible, reasoning): bytes to forward as normal content
+// vs. bytes to route to a reasoning_chunk message. Trailing bytes that could
+// be a partial tag are held back in `pending` for the next call.
+type harmonyStripper struct {
+	inReasoning bool
+	pending     string
+}
+
+func (h *harmonyStripper) process(chunk string) (visible, reasoning string) {
+	const openTag = "<reasoning>"
+	const closeTag = "</reasoning>"
+
+	buf := h.pending + chunk
+	h.pending = ""
+
+	var visOut, reasOut strings.Builder
+
+	for {
+		tag := openTag
+		if h.inReasoning {
+			tag = closeTag
+		}
+		idx := strings.Index(buf, tag)
+		if idx >= 0 {
+			if h.inReasoning {
+				reasOut.WriteString(buf[:idx])
+			} else {
+				visOut.WriteString(buf[:idx])
+			}
+			buf = buf[idx+len(tag):]
+			h.inReasoning = !h.inReasoning
+			continue
+		}
+		// No full tag in buf. Hold back any trailing bytes that could be a
+		// partial prefix of the tag we're hunting, so we don't emit a half-tag.
+		hold := 0
+		max := len(tag) - 1
+		if max > len(buf) {
+			max = len(buf)
+		}
+		for n := max; n > 0; n-- {
+			if strings.HasSuffix(buf, tag[:n]) {
+				hold = n
+				break
+			}
+		}
+		emit := buf[:len(buf)-hold]
+		if h.inReasoning {
+			reasOut.WriteString(emit)
+		} else {
+			visOut.WriteString(emit)
+		}
+		h.pending = buf[len(buf)-hold:]
+		break
+	}
+
+	return visOut.String(), reasOut.String()
 }
 
 // ImageRegistryAdapter wraps ImageRegistryService to implement tools.ImageRegistryInterface
@@ -220,16 +286,38 @@ func (s *ChatService) SetModelAliases(providerID int, aliases map[string]models.
 	}
 }
 
+// normalizeAPIModelName converts a possibly-prefixed model identifier (e.g.
+// "3:zai.glm-5", the canonical row id stored in model_aliases.model_id) into
+// the bare API model name (e.g. "zai.glm-5") that providers like Bedrock
+// expect. Returns the input unchanged if it doesn't look up to a row.
+//
+// Centralised here so every caller of the alias resolver (chat, Nexus cortex
+// classifier, tool predictor, memory pool, daemon runner, etc.) gets the
+// correct upstream identifier without having to remember to fix it.
+func (s *ChatService) normalizeAPIModelName(name string) string {
+	if name == "" {
+		return name
+	}
+	if _, apiName, err := s.providerService.GetByModelIDWithName(name); err == nil && apiName != "" {
+		if apiName != name {
+			log.Printf("🩹 [MODEL-ALIAS] Normalized row id '%s' -> api name '%s'", name, apiName)
+		}
+		return apiName
+	}
+	return name
+}
+
 // resolveModelName resolves a frontend model name to the actual model name using aliases
 func (s *ChatService) resolveModelName(providerID int, modelName string) string {
 	if aliases, exists := s.modelAliases[providerID]; exists {
 		if actualModel, found := aliases[modelName]; found {
-			log.Printf("🔄 [MODEL-ALIAS] Resolved '%s' -> '%s' for provider %d", modelName, actualModel, providerID)
-			return actualModel
+			normalized := s.normalizeAPIModelName(actualModel)
+			log.Printf("🔄 [MODEL-ALIAS] Resolved '%s' -> '%s' for provider %d", modelName, normalized, providerID)
+			return normalized
 		}
 	}
-	// No alias found, return original model name
-	return modelName
+	// No alias found, return original model name (still normalize in case it's a row id)
+	return s.normalizeAPIModelName(modelName)
 }
 
 // resolveModelAlias searches all providers for a model alias and returns the provider ID and actual model name
@@ -237,8 +325,9 @@ func (s *ChatService) resolveModelName(providerID int, modelName string) string 
 func (s *ChatService) resolveModelAlias(aliasName string) (int, string, bool) {
 	for providerID, aliases := range s.modelAliases {
 		if actualModel, found := aliases[aliasName]; found {
-			log.Printf("🔄 [MODEL-ALIAS] Resolved alias '%s' -> provider=%d, model='%s'", aliasName, providerID, actualModel)
-			return providerID, actualModel, true
+			normalized := s.normalizeAPIModelName(actualModel)
+			log.Printf("🔄 [MODEL-ALIAS] Resolved alias '%s' -> provider=%d, model='%s'", aliasName, providerID, normalized)
+			return providerID, normalized, true
 		}
 	}
 	return 0, "", false
@@ -283,10 +372,12 @@ func (s *ChatService) GetDefaultProviderWithModel() (*models.Provider, string, e
 		return nil, "", err
 	}
 
-	// Query for the first visible model from this provider
+	// Query for the first visible model from this provider. Select the
+	// `name` column (upstream API id like "zai.glm-5"), NOT `id` (the
+	// row id like "3:zai.glm-5" — strict providers reject the prefix).
 	var modelID string
 	err = s.db.QueryRow(`
-		SELECT id FROM models
+		SELECT name FROM models
 		WHERE provider_id = ? AND is_visible = 1
 		ORDER BY name
 		LIMIT 1
@@ -295,7 +386,7 @@ func (s *ChatService) GetDefaultProviderWithModel() (*models.Provider, string, e
 	if err != nil {
 		// No models found, try without visibility filter
 		err = s.db.QueryRow(`
-			SELECT id FROM models
+			SELECT name FROM models
 			WHERE provider_id = ?
 			ORDER BY name
 			LIMIT 1
@@ -418,10 +509,12 @@ func (s *ChatService) GetTextProviderWithModel() (*models.Provider, string, erro
 		}
 	}
 
-	// Get first model from this provider
+	// Get first model from this provider. Select `name` (upstream API id),
+	// NOT `id` — the row id form ("3:zai.glm-5") is rejected by strict
+	// providers (Bedrock) as "invalid model identifier".
 	var modelID string
 	err = s.db.QueryRow(`
-		SELECT id FROM models
+		SELECT name FROM models
 		WHERE provider_id = ? AND is_visible = 1
 		ORDER BY name
 		LIMIT 1
@@ -430,7 +523,7 @@ func (s *ChatService) GetTextProviderWithModel() (*models.Provider, string, erro
 	if err != nil {
 		// Try without visibility filter
 		err = s.db.QueryRow(`
-			SELECT id FROM models
+			SELECT name FROM models
 			WHERE provider_id = ?
 			ORDER BY name
 			LIMIT 1
@@ -1470,6 +1563,16 @@ func (s *ChatService) GetEffectiveConfig(userConn *models.UserConnection, modelI
 					}
 				}
 
+				// Defensive: an alias may have been seeded with a row-id
+				// (e.g. "3:zai.glm-5") instead of the bare API name. Strict
+				// providers like Bedrock reject the prefixed form. If the
+				// actualModel resolves to a row in the models table, swap to
+				// that row's `name` column before sending to the provider.
+				if _, apiName, lookupErr := s.providerService.GetByModelIDWithName(actualModel); lookupErr == nil && apiName != "" && apiName != actualModel {
+					log.Printf("🩹 [CONFIG] Alias actualModel '%s' is a row id; using api name '%s'", actualModel, apiName)
+					actualModel = apiName
+				}
+
 				log.Printf("🏢 [CONFIG] Using aliased model for user %s: alias=%s, actual_model=%s, provider=%s",
 					userConn.ConnID, modelID, actualModel, provider.Name)
 
@@ -1842,6 +1945,12 @@ func (s *ChatService) StreamChatCompletion(userConn *models.UserConnection) erro
 
 	messages = s.buildMessagesWithSystemPrompt(systemPrompt, messages)
 
+	// Annotate the system block with cache_control for providers that honor
+	// it (Bedrock OpenAI shim, Anthropic native). Silent no-op otherwise.
+	if applyPromptCaching(messages, config.BaseURL) {
+		log.Printf("💾 [CACHE] Applied prompt caching marker on system message (provider: %s)", config.BaseURL)
+	}
+
 	// Note: Context optimization now happens AFTER streaming ends (in processStream)
 	// This prevents blocking the response while the user waits
 
@@ -1856,6 +1965,22 @@ func (s *ChatService) StreamChatCompletion(userConn *models.UserConnection) erro
 	// Only include tools if non-empty (some APIs reject empty tools array)
 	if len(tools) > 0 {
 		chatReq.Tools = tools
+		// Opt in to parallel tool calls so the model can emit multiple
+		// tool_calls per turn — the execution loop below fans them out
+		// concurrently. Pointer + omitempty means providers that don't
+		// recognize the field won't see it (we always set it explicitly
+		// when tools are present).
+		parallelOn := true
+		chatReq.ParallelToolCalls = &parallelOn
+	}
+
+	// Forward the reasoning_effort hint to the provider. Only emit known
+	// values to avoid validation errors on providers that strictly
+	// enforce the enum (gpt-oss rejects "none" but accepts low/medium/high).
+	switch strings.ToLower(userConn.ReasoningEffort) {
+	case "low", "medium", "high":
+		chatReq.ReasoningEffort = strings.ToLower(userConn.ReasoningEffort)
+		log.Printf("🧠 [REASONING] effort=%s for user %s", chatReq.ReasoningEffort, userConn.ConnID)
 	}
 
 	reqBody, err := json.Marshal(chatReq)
@@ -2025,8 +2150,9 @@ func (s *ChatService) StreamChatCompletion(userConn *models.UserConnection) erro
 		s.healthService.MarkHealthy(health.CapabilityChat, config.ProviderID, config.Model)
 	}
 
-	// Process SSE stream
-	return s.processStream(resp.Body, userConn)
+	// Process SSE stream — forward the resolved model name so the cost
+	// chip's pricing lookup can find the right entry.
+	return s.processStream(resp.Body, userConn, config.Model)
 }
 
 // detectToolIncompatibility checks if an error message indicates tool incompatibility
@@ -2155,7 +2281,7 @@ func (s *ChatService) safeSendChunk(userConn *models.UserConnection, content str
 }
 
 // processStream processes the SSE stream from the AI provider
-func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConnection) error {
+func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConnection, modelName string) error {
 	scanner := bufio.NewScanner(reader)
 
 	// Increase buffer to 1MB for large SSE chunks (default is 64KB)
@@ -2164,6 +2290,13 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 	buf := make([]byte, maxCapacity)
 	scanner.Buffer(buf, maxCapacity)
 
+	// turnStart times the wall-clock latency of this assistant turn so we
+	// can surface it on the cost chip in the UI.
+	turnStart := time.Now()
+	// turnUsage accumulates the per-turn usage we report on stream_end:
+	// prompt + completion tokens, cached tokens from cache_control hits,
+	// and an estimated USD cost (best-effort from a small price map).
+	var turnPromptTokens, turnCompletionTokens, turnCachedTokens int
 	var fullContent strings.Builder
 
 	// Create stream buffer for this conversation (for resume capability)
@@ -2173,6 +2306,13 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 	// Track tool calls by index to accumulate streaming arguments
 	toolCallsMap := make(map[int]*ToolCallAccumulator)
 	var finishReason string
+
+	// gpt-oss (Bedrock Harmony) emits chain-of-thought inline as
+	// <reasoning>...</reasoning> within the content delta; this stripper
+	// pulls those spans out and routes them to reasoning_chunk so the UI's
+	// existing ThinkingBlock renders them collapsibly instead of leaking
+	// to the chat. Stateful across chunks to handle tags split mid-tag.
+	var harmony harmonyStripper
 
 	for scanner.Scan() {
 		select {
@@ -2197,6 +2337,33 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 		var chunk map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+
+		// Capture usage from the final SSE event before the choices check —
+		// OpenAI/Bedrock emit a chunk with empty `choices` and `usage` set on
+		// the last event, which the choices-empty fast-path below would skip.
+		// Logs cached/created token totals so chat-path turns show the same
+		// 💾 cache-hit metric daemons already log, and stores them so we can
+		// attach to stream_end as a TokenUsage block (cost chip).
+		if usageRaw, ok := chunk["usage"].(map[string]interface{}); ok {
+			promptTokens := intFromJSON(usageRaw["prompt_tokens"])
+			completionTokens := intFromJSON(usageRaw["completion_tokens"])
+			cached := 0
+			if details, ok := usageRaw["prompt_tokens_details"].(map[string]interface{}); ok {
+				cached = intFromJSON(details["cached_tokens"])
+			}
+			if promptTokens > 0 {
+				turnPromptTokens = promptTokens
+				turnCompletionTokens = completionTokens
+				turnCachedTokens = cached
+			}
+			if cached > 0 && promptTokens > 0 {
+				pct := float64(cached) / float64(promptTokens) * 100
+				log.Printf("💾 [CACHE] chat usage: %d prompt (%d cached, %.0f%% hit) / %d completion",
+					promptTokens, cached, pct, completionTokens)
+			} else if promptTokens > 0 {
+				log.Printf("📊 [USAGE] chat: %d prompt / %d completion (cache: 0)", promptTokens, completionTokens)
+			}
 		}
 
 		choices, ok := chunk["choices"].([]interface{})
@@ -2225,13 +2392,20 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 
 		// Handle content chunks
 		if content, ok := delta["content"].(string); ok {
-			fullContent.WriteString(content)
+			visible, reasoning := harmony.process(content)
 
-			// Buffer chunk for potential resume (always buffer, even if send succeeds)
-			s.streamBuffer.AppendChunk(userConn.ConversationID, content)
+			if reasoning != "" {
+				userConn.WriteChan <- models.ServerMessage{
+					Type:    "reasoning_chunk",
+					Content: reasoning,
+				}
+			}
 
-			// Send to client with graceful handling for closed channel
-			s.safeSendChunk(userConn, content)
+			if visible != "" {
+				fullContent.WriteString(visible)
+				s.streamBuffer.AppendChunk(userConn.ConversationID, visible)
+				s.safeSendChunk(userConn, visible)
+			}
 		}
 
 		// Handle tool calls - ACCUMULATE, don't execute yet!
@@ -2306,7 +2480,7 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 		if finishReason != "tool_calls" {
 			log.Printf("⚠️  [TOOL] finish_reason was '%s' but tool calls were accumulated - treating as tool call response (provider compatibility fix)", finishReason)
 		}
-		log.Printf("🔧 [TOOL] Streaming complete, executing %d tool call(s)", len(toolCallsMap))
+		log.Printf("🔧 [TOOL] Streaming complete, executing %d tool call(s) (parallel)", len(toolCallsMap))
 
 		// Get messages from cache
 		messages := s.getConversationMessages(userConn.ConversationID)
@@ -2315,48 +2489,84 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 		var toolCallMessages []map[string]interface{}
 		var toolResults []map[string]interface{}
 
-		// Execute all tools and collect results
+		// Phase 1: build all tool_call messages synchronously (pure data
+		// shaping, no I/O). Also collect the runnable tasks for phase 2.
+		type pendingTool struct {
+			callID  string
+			name    string
+			argsStr string
+		}
+		var pending []pendingTool
 		for index, acc := range toolCallsMap {
-			if acc.Name != "" && acc.Arguments.Len() > 0 {
-				argsStr := acc.Arguments.String()
-				log.Printf("🔧 [TOOL] Executing tool %s (index %d, args length: %d bytes)", acc.Name, index, len(argsStr))
-
-				// Sanitize concatenated JSON before storing in history
-				// Gemini sometimes returns multiple JSON objects concatenated like {"a":"b"}{"c":"d"}
-				// This causes INVALID_ARGUMENT when sent back in conversation history
-				if fixed, ok := sanitizeConcatenatedJSON(argsStr); ok {
-					log.Printf("🔧 [FIX] Sanitized concatenated JSON in tool call args for %s before storing in history", acc.Name)
-					argsStr = fixed
-				}
-
-				// Add to tool call messages
-				tcMsg := map[string]interface{}{
-					"id":   acc.ID,
-					"type": acc.Type,
-					"function": map[string]interface{}{
-						"name":      acc.Name,
-						"arguments": argsStr,
-					},
-				}
-				// CRITICAL: Include extra_content (Gemini thought_signature) if present
-				// Gemini REQUIRES the thought_signature to be present when echoing back tool calls
-				// in the conversation history. Without it, we get INVALID_ARGUMENT errors.
-				// See: https://ai.google.dev/gemini-api/docs/thought-signatures
-				if acc.ExtraContent != nil {
-					tcMsg["extra_content"] = acc.ExtraContent
-					log.Printf("🧠 [TOOL] Including thought_signature in tool call message for %s (required by Gemini)", acc.Name)
-				}
-				toolCallMessages = append(toolCallMessages, tcMsg)
-
-				// Execute tool and get result
-				result := s.executeToolSyncWithResult(acc.ID, acc.Name, argsStr, userConn)
-				toolResults = append(toolResults, map[string]interface{}{
-					"role":         "tool",
-					"tool_call_id": acc.ID,
-					"name":         acc.Name,
-					"content":      result,
-				})
+			if acc.Name == "" || acc.Arguments.Len() == 0 {
+				continue
 			}
+			argsStr := acc.Arguments.String()
+			log.Printf("🔧 [TOOL] Queueing tool %s (index %d, args length: %d bytes)", acc.Name, index, len(argsStr))
+
+			// Sanitize concatenated JSON before storing in history (Gemini
+			// sometimes emits multiple JSON objects concatenated).
+			if fixed, ok := sanitizeConcatenatedJSON(argsStr); ok {
+				log.Printf("🔧 [FIX] Sanitized concatenated JSON in tool call args for %s before storing in history", acc.Name)
+				argsStr = fixed
+			}
+
+			tcMsg := map[string]interface{}{
+				"id":   acc.ID,
+				"type": acc.Type,
+				"function": map[string]interface{}{
+					"name":      acc.Name,
+					"arguments": argsStr,
+				},
+			}
+			// CRITICAL: include Gemini thought_signature when echoing tool
+			// calls back in history. Without it Gemini returns INVALID_ARGUMENT.
+			// See: https://ai.google.dev/gemini-api/docs/thought-signatures
+			if acc.ExtraContent != nil {
+				tcMsg["extra_content"] = acc.ExtraContent
+				log.Printf("🧠 [TOOL] Including thought_signature in tool call message for %s (required by Gemini)", acc.Name)
+			}
+			toolCallMessages = append(toolCallMessages, tcMsg)
+			pending = append(pending, pendingTool{callID: acc.ID, name: acc.Name, argsStr: argsStr})
+		}
+
+		// Phase 2: execute tools concurrently. Each tool is independent —
+		// they may touch shared resources (image registry, file uploads)
+		// but those services are individually goroutine-safe. Result order
+		// in the messages array doesn't matter because each `tool` message
+		// is keyed back to its call via tool_call_id.
+		if len(pending) > 0 {
+			parallelStart := time.Now()
+			results := make([]map[string]interface{}, len(pending))
+			var wg sync.WaitGroup
+			for i := range pending {
+				wg.Add(1)
+				go func(idx int, t pendingTool) {
+					defer wg.Done()
+					defer func() {
+						if rec := recover(); rec != nil {
+							log.Printf("⚠️ [TOOL] Panic recovered in parallel tool %s: %v", t.name, rec)
+							results[idx] = map[string]interface{}{
+								"role":         "tool",
+								"tool_call_id": t.callID,
+								"name":         t.name,
+								"content":      fmt.Sprintf("tool execution panicked: %v", rec),
+							}
+						}
+					}()
+					result := s.executeToolSyncWithResult(t.callID, t.name, t.argsStr, userConn)
+					results[idx] = map[string]interface{}{
+						"role":         "tool",
+						"tool_call_id": t.callID,
+						"name":         t.name,
+						"content":      result,
+					}
+				}(i, pending[i])
+			}
+			wg.Wait()
+			toolResults = append(toolResults, results...)
+			log.Printf("⏱️ [TOOL] Executed %d tool(s) in parallel in %s",
+				len(pending), time.Since(parallelStart))
 		}
 
 		// Only add assistant message if we have actual tool calls
@@ -2418,10 +2628,26 @@ func (s *ChatService) processStream(reader io.Reader, userConn *models.UserConne
 			currentCount := userConn.MessageCount
 			userConn.Mutex.Unlock()
 
+			// Attach per-turn usage so the UI can render the cost chip.
+			// Always populate token + duration; cost is best-effort.
+			var usage *models.TokenUsage
+			if turnPromptTokens > 0 || turnCompletionTokens > 0 {
+				cost := estimateCostUSD(modelName, turnPromptTokens-turnCachedTokens, turnCachedTokens, turnCompletionTokens)
+				usage = &models.TokenUsage{
+					Input:            turnPromptTokens,
+					Output:           turnCompletionTokens,
+					Cached:           turnCachedTokens,
+					DurationMs:       int(time.Since(turnStart).Milliseconds()),
+					EstimatedCostUSD: cost,
+					Model:            modelName,
+				}
+			}
+
 			// Send completion message
 			userConn.WriteChan <- models.ServerMessage{
 				Type:           "stream_end",
 				ConversationID: userConn.ConversationID,
+				Tokens:         usage,
 			}
 
 			// Generate title after first user-assistant exchange (2 messages: user + assistant)
@@ -2553,6 +2779,22 @@ parseSuccess:
 		log.Printf("🔌 [CHAT] Injected user connection and prompt waiter for ask_user tool")
 	}
 
+	// Inject the subagent runner (this chat service) so the fan-out tool
+	// can spin a fresh agentic loop. Wiring via interface keeps the tools
+	// package free of any services import (which would be a cycle).
+	if toolName == "spawn_subagent" {
+		args[tools.SubagentRunnerKey] = tools.SubagentRunner(s)
+		log.Printf("🤖 [CHAT] Injected SubagentRunner for spawn_subagent tool")
+	}
+
+	// Inject the memory access shim for the model-callable memory tools.
+	// Same interface-injection trick — the tools package only sees the
+	// MemoryAccess contract, never the concrete services.
+	if toolName == "add_memory" || toolName == "search_memory" {
+		args[tools.MemoryAccessKey] = tools.MemoryAccess(s)
+		log.Printf("🧠 [CHAT] Injected MemoryAccess for %s tool", toolName)
+	}
+
 	// Inject image provider config and registry for generate_image tool
 	if toolName == "generate_image" {
 		imageProviderService := GetImageProviderService()
@@ -2626,11 +2868,32 @@ parseSuccess:
 		return ""
 	}
 
+	// Fire PreToolUse hooks — first hook to deny short-circuits the call
+	// with its reason in place of a real tool result. Hooks may also mutate
+	// args in place (e.g. redact secrets) before the tool sees them.
+	if dec := tools.RunPreToolHooks(toolName, args); !dec.Allow {
+		reason := dec.Reason
+		if reason == "" {
+			reason = "blocked by policy"
+		}
+		userConn.SafeSend(models.ServerMessage{
+			Type:            "tool_result",
+			ToolName:        toolName,
+			ToolDisplayName: toolDisplayName,
+			ToolIcon:        toolIcon,
+			ToolDescription: toolDescription,
+			Status:          "failed",
+			Result:          reason,
+		})
+		return reason
+	}
+
 	// Execute tool (with injected user context)
 	// Check if this is a built-in tool or MCP tool
 	tool, exists := s.toolRegistry.GetUserTool(userConn.UserID, toolName)
 	var result string
 	var err error
+	hookStart := time.Now()
 
 	if exists && tool.Source == tools.ToolSourceMCPLocal {
 		// MCP tool - route to local client
@@ -2698,14 +2961,36 @@ parseSuccess:
 
 	log.Printf("✅ [TOOL] Tool %s executed successfully, result length: %d", toolName, len(result))
 
+	// PostToolUse hooks: may rewrite the result (e.g. truncate, redact).
+	// Each post hook sees the previous hook's output. err is nil on success
+	// — error paths above already returned.
+	result = tools.RunPostToolHooks(toolName, args, result, time.Since(hookStart), nil)
+
 	// Try to parse result as JSON to extract plots and files (for E2B tools)
 	// We strip base64 data from the LLM result to avoid sending huge payloads
 	var resultData map[string]interface{}
 	var plots []models.PlotData
+	var dataframes []models.DataFrameData
 	llmResult := result // Default: send full result to LLM
 	needsLLMSummary := false
 
 	if err := json.Unmarshal([]byte(result), &resultData); err == nil {
+		// Extract DataFrames emitted by display_df(). The Python bootstrap
+		// in python_runner_tool wraps each frame in <<DOBBY_DF>>{...}<</DOBBY_DF>>
+		// markers in stdout. Pull them out, hand to the frontend as a
+		// renderable artifact, and strip the marker line from the stdout
+		// the model sees (replaced with a one-line summary so the model
+		// still knows it displayed something).
+		if stdoutRaw, ok := resultData["stdout"].(string); ok && strings.Contains(stdoutRaw, "<<DOBBY_DF>>") {
+			cleaned, frames := extractDataFrames(stdoutRaw)
+			if len(frames) > 0 {
+				dataframes = append(dataframes, frames...)
+				resultData["stdout"] = cleaned
+				needsLLMSummary = true
+				log.Printf("📋 [TOOL] Extracted %d dataframe(s) from %s stdout", len(frames), toolName)
+			}
+		}
+
 		// Check for plots - extract for frontend, strip from LLM
 		if plotsRaw, hasPlots := resultData["plots"]; hasPlots {
 			if plotsArray, ok := plotsRaw.([]interface{}); ok && len(plotsArray) > 0 {
@@ -2796,6 +3081,7 @@ parseSuccess:
 		Status:          "completed",
 		Result:          result, // Full result for frontend
 		Plots:           plots,  // Extracted plots for rendering
+		DataFrames:      dataframes,
 	}
 
 	// Try to send the tool result
@@ -2804,7 +3090,7 @@ parseSuccess:
 
 		// Buffer tool results with artifacts (images, etc.) for reconnection recovery
 		// Only buffer if send failed - this ensures users don't lose generated images
-		if len(plots) > 0 && userConn.ConversationID != "" {
+		if (len(plots) > 0 || len(dataframes) > 0) && userConn.ConversationID != "" {
 			s.streamBuffer.AppendMessage(userConn.ConversationID, BufferedMessage{
 				Type:            "tool_result",
 				ToolName:        toolName,
@@ -2814,15 +3100,57 @@ parseSuccess:
 				Status:          "completed",
 				Result:          result,
 				Plots:           plots,
+				DataFrames:      dataframes,
 			})
 			log.Printf("📦 [TOOL] Buffered tool result for %s for reconnection recovery", toolName)
 		}
 		return llmResult
 	}
 
-	log.Printf("✅ [TOOL] Tool result for %s ready (plots: %d)", toolName, len(plots))
+	log.Printf("✅ [TOOL] Tool result for %s ready (plots: %d, dataframes: %d)", toolName, len(plots), len(dataframes))
 	// Return LLM-friendly result (without heavy image data)
 	return llmResult
+}
+
+// extractDataFrames pulls <<DOBBY_DF>>{json}<</DOBBY_DF>> envelopes out of a
+// stdout string and returns (cleanedStdout, frames). The marker is emitted by
+// the display_df() helper auto-injected by python_runner_tool. We replace
+// each occurrence in stdout with a tiny one-line summary so the model still
+// sees that something was displayed (otherwise it might re-emit the table as
+// text on the next turn assuming it failed to render).
+func extractDataFrames(stdout string) (string, []models.DataFrameData) {
+	const startTag = "<<DOBBY_DF>>"
+	const endTag = "<</DOBBY_DF>>"
+	var frames []models.DataFrameData
+	var b strings.Builder
+	remaining := stdout
+	for {
+		i := strings.Index(remaining, startTag)
+		if i < 0 {
+			b.WriteString(remaining)
+			break
+		}
+		b.WriteString(remaining[:i])
+		j := strings.Index(remaining[i+len(startTag):], endTag)
+		if j < 0 {
+			// Malformed — keep remainder visible so the user can see it
+			b.WriteString(remaining[i:])
+			break
+		}
+		payload := remaining[i+len(startTag) : i+len(startTag)+j]
+		var df models.DataFrameData
+		if err := json.Unmarshal([]byte(payload), &df); err == nil && len(df.Headers) > 0 {
+			frames = append(frames, df)
+			label := df.Name
+			if label == "" {
+				label = "dataframe"
+			}
+			b.WriteString(fmt.Sprintf("[displayed %s: %d rows × %d cols]", label, df.RowCount, df.ColCount))
+		}
+		// Skip past the closing tag
+		remaining = remaining[i+len(startTag)+j+len(endTag):]
+	}
+	return b.String(), frames
 }
 
 // getMarkdownFormattingGuidelines returns formatting rules appended to all system prompts
@@ -3066,10 +3394,10 @@ func (s *ChatService) GetSystemPrompt(userConn *models.UserConnection, includeAs
 	return temporalContext + defaultPrompt + memoryContext + appendix
 }
 
-// getDefaultSystemPrompt returns the ClaraVerse-specific system prompt
+// getDefaultSystemPrompt returns the DobbyAI-specific system prompt
 // Minimal prompt - models can see tool definitions directly in the API call
 func getDefaultSystemPrompt() string {
-	return `You are ClaraVerse AI, a helpful and intelligent assistant.
+	return `You are DobbyAI, a helpful and intelligent assistant.
 
 ## Response Style
 
@@ -3092,6 +3420,92 @@ Create interactive content when appropriate:
 - Use available tools when they help accomplish the task
 - Cite sources when presenting information from external searches
 - Ask clarifying questions when requirements are ambiguous`
+}
+
+// modelPricing is a small static map of $/Mtok (input, cached-input, output)
+// for models we know. Cached-input rate captures the discount providers like
+// Bedrock/Anthropic give on cache_control hits (typically ~10% of base in).
+// Missing entries return 0 cost — the UI hides the cost chip in that case.
+//
+// Keep this list short and intentional. The goal is "you can see what each
+// turn cost when we know"; it's not a full billing system. Prices are
+// USD per 1M tokens, accurate as of May 2026 from each provider's page.
+var modelPricing = map[string]struct{ inUSD, cachedUSD, outUSD float64 }{
+	// Bedrock OpenAI shim — current accessible set on the user's key
+	"qwen.qwen3-32b-v1:0":               {0.15, 0.015, 0.60},
+	"qwen.qwen3-coder-480b-a35b-v1:0":   {2.00, 0.20, 6.00},
+	"moonshotai.kimi-k2.5":              {0.60, 0.06, 2.50},
+	"zai.glm-5":                         {0.60, 0.06, 2.20},
+	"openai.gpt-oss-20b-1:0":            {0.10, 0.01, 0.40},
+	"openai.gpt-oss-120b-1:0":           {0.60, 0.06, 2.40},
+}
+
+// estimateCostUSD totals the cost for one turn. inputTokens already excludes
+// cachedTokens (caller subtracts) so we don't double-count.
+func estimateCostUSD(model string, freshInput, cached, output int) float64 {
+	p, ok := modelPricing[model]
+	if !ok {
+		return 0
+	}
+	const oneMillion = 1_000_000.0
+	cost := float64(freshInput)*p.inUSD/oneMillion +
+		float64(cached)*p.cachedUSD/oneMillion +
+		float64(output)*p.outUSD/oneMillion
+	if cost < 0 {
+		return 0
+	}
+	return cost
+}
+
+// intFromJSON pulls an int out of a json.Unmarshal'd interface{} field that
+// may be a float64 (Go's default for unstructured JSON numbers) or an int.
+// Returns 0 for nil / wrong type.
+func intFromJSON(v interface{}) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	}
+	return 0
+}
+
+// providerSupportsPromptCaching reports whether the provider behind baseURL
+// honors Anthropic-style cache_control markers on chat-completions requests.
+// Probed live against Bedrock's ap-south-1 OpenAI shim on 2026-05-30: the
+// shim accepts cache_control on the top-level system message and reports
+// cached_tokens in usage.prompt_tokens_details. Anthropic's native API uses
+// the same field shape. Other providers ignore the field silently.
+func providerSupportsPromptCaching(baseURL string) bool {
+	u := strings.ToLower(baseURL)
+	return strings.Contains(u, "bedrock-runtime") ||
+		strings.Contains(u, "bedrock-mantle") ||
+		strings.Contains(u, "api.anthropic.com")
+}
+
+// applyPromptCaching annotates the system message with cache_control:ephemeral
+// when the target provider supports it. System prompts in this codebase are
+// large (>1k tokens) and re-sent every turn — caching them gives a ~98% hit
+// rate on the system block once warm.
+//
+// We deliberately mutate the message map in place (callers pass slices of
+// maps by reference). Returns true if caching was applied.
+func applyPromptCaching(messages []map[string]interface{}, baseURL string) bool {
+	if !providerSupportsPromptCaching(baseURL) {
+		return false
+	}
+	if len(messages) == 0 {
+		return false
+	}
+	if role, ok := messages[0]["role"].(string); ok && role == "system" {
+		if _, already := messages[0]["cache_control"]; !already {
+			messages[0]["cache_control"] = map[string]interface{}{"type": "ephemeral"}
+		}
+		return true
+	}
+	return false
 }
 
 // buildMessagesWithSystemPrompt ensures system prompt is the first message
@@ -3683,13 +4097,13 @@ func (s *ChatService) getConfigForModel(modelID string) (*models.Config, error) 
 		}, nil
 	}
 
-	// Try to find the provider using GetByModelID
-	provider, err := s.providerService.GetByModelID(modelID)
-	if err == nil && provider.Enabled {
+	// Try to find the provider using GetByModelIDWithName so we forward
+	// the upstream API name (not the row id) to the model.
+	if provider, apiName, err := s.providerService.GetByModelIDWithName(modelID); err == nil && provider.Enabled {
 		return &models.Config{
 			BaseURL:    provider.BaseURL,
 			APIKey:     provider.APIKey,
-			Model:      modelID,
+			Model:      apiName,
 			ProviderID: provider.ID,
 		}, nil
 	}
@@ -3765,4 +4179,154 @@ func isSimpleGreeting(message string) bool {
 	}
 
 	return false
+}
+
+// AddMemory satisfies tools.MemoryAccess — the contract the add_memory
+// built-in tool calls into when the model decides something is worth
+// remembering across conversations.
+func (s *ChatService) AddMemory(ctx context.Context, userID, content, category, conversationID string, tags []string) (string, error) {
+	storage := s.memoryStorageServiceFromExtraction()
+	if storage == nil {
+		return "", fmt.Errorf("memory storage not available")
+	}
+	mem, err := storage.CreateMemory(ctx, userID, content, category, tags, 0.5, conversationID)
+	if err != nil {
+		return "", err
+	}
+	return mem.ID.Hex(), nil
+}
+
+// SearchMemory satisfies tools.MemoryAccess. Uses the same vector pipeline
+// the inline memory selector uses, so what the model can fish for matches
+// what the system would inject automatically.
+func (s *ChatService) SearchMemory(ctx context.Context, userID, query string, limit int) ([]tools.MemorySearchHit, error) {
+	storage := s.memoryStorageServiceFromExtraction()
+	if storage == nil {
+		return nil, fmt.Errorf("memory storage not available")
+	}
+	if s.memorySelectionService == nil {
+		return nil, fmt.Errorf("memory selection not available")
+	}
+	// Reuse the embedding service via the selection service path. If
+	// embeddings aren't configured, fall back to score-ordered top-K.
+	if s.memorySelectionService.HasEmbedding(ctx) {
+		vec, err := s.memorySelectionService.EmbedQuery(ctx, query)
+		if err == nil && len(vec) > 0 {
+			hits, sErr := storage.SearchByEmbedding(ctx, userID, vec, limit)
+			if sErr == nil {
+				out := make([]tools.MemorySearchHit, 0, len(hits))
+				for _, h := range hits {
+					out = append(out, tools.MemorySearchHit{
+						ID:        h.Memory.ID.Hex(),
+						Content:   h.Memory.DecryptedContent,
+						Relevance: h.Similarity,
+					})
+				}
+				return out, nil
+			}
+		}
+	}
+	// Score-ordered fallback.
+	mems, err := storage.GetActiveMemories(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if limit > len(mems) {
+		limit = len(mems)
+	}
+	out := make([]tools.MemorySearchHit, 0, limit)
+	for i := 0; i < limit; i++ {
+		out = append(out, tools.MemorySearchHit{
+			ID:      mems[i].ID.Hex(),
+			Content: mems[i].DecryptedContent,
+		})
+	}
+	return out, nil
+}
+
+// memoryStorageServiceFromExtraction is a tiny accessor — the chat service
+// doesn't hold a direct reference to MemoryStorageService (only to the
+// selection + extraction services), but the extraction service does. This
+// keeps us from threading another field through every constructor.
+func (s *ChatService) memoryStorageServiceFromExtraction() *MemoryStorageService {
+	if s.memoryExtractionService == nil {
+		return nil
+	}
+	return s.memoryExtractionService.StorageService()
+}
+
+// RunSubagent satisfies tools.SubagentRunner — the contract the
+// spawn_subagent built-in tool calls into. The model invokes spawn_subagent
+// with a self-contained task; this method runs a fresh agentic loop on a
+// throwaway conversation ID, with a filtered tool subset (parent's tools
+// minus spawn_subagent to prevent recursion), and returns only the final
+// summary. Intermediate tool calls and reasoning never enter the parent's
+// context — the 2026 fan-out pattern.
+func (s *ChatService) RunSubagent(ctx context.Context, params tools.SubagentParams) (tools.SubagentResult, error) {
+	if strings.TrimSpace(params.Task) == "" {
+		return tools.SubagentResult{}, fmt.Errorf("task is required")
+	}
+
+	// Inherit model from parent if not specified. Without a UserConnection
+	// handy in this synchronous code path, fall back to the provider's
+	// default text model via the alias / config system.
+	modelID := params.ModelID
+	if modelID == "" {
+		_, m, err := s.GetTextProviderWithModel()
+		if err != nil {
+			return tools.SubagentResult{}, fmt.Errorf("no model available for subagent: %w", err)
+		}
+		modelID = m
+	}
+
+	systemPrompt := params.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = `You are a focused subagent dispatched by a parent agent to complete one specific task. Use the tools available to you to accomplish the task end-to-end. When done, reply with a single concise summary of what you found / did — your parent does not see your intermediate steps.`
+	}
+
+	messages := []map[string]interface{}{
+		{"role": "system", "content": systemPrompt},
+		{"role": "user", "content": params.Task},
+	}
+
+	// Build the tool set the child sees. Drop spawn_subagent to prevent
+	// runaway recursion; allow_tools whitelist further narrows if set.
+	registry := tools.GetRegistry()
+	allowedSet := map[string]bool{}
+	for _, name := range params.AllowedTools {
+		allowedSet[name] = true
+	}
+	var availableTools []map[string]interface{}
+	for _, t := range registry.List() {
+		fn, _ := t["function"].(map[string]interface{})
+		name, _ := fn["name"].(string)
+		if name == "spawn_subagent" {
+			continue // no recursion
+		}
+		if len(allowedSet) > 0 && !allowedSet[name] {
+			continue
+		}
+		availableTools = append(availableTools, t)
+	}
+
+	maxIter := params.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 10
+	}
+
+	// Fresh conversation ID — keeps subagent's intermediate messages out
+	// of the parent's cache.
+	childConvID := fmt.Sprintf("subagent-%s-%d", params.ParentConvID, time.Now().UnixNano())
+
+	log.Printf("🤖 [SUBAGENT-RUN] user=%s child_conv=%s model=%s tools=%d max_iter=%d",
+		params.UserID, childConvID, modelID, len(availableTools), maxIter)
+
+	result, err := s.ChatCompletionWithToolsEx(ctx, params.UserID, childConvID, modelID, messages, availableTools, maxIter)
+	if err != nil {
+		return tools.SubagentResult{}, err
+	}
+
+	return tools.SubagentResult{
+		Summary: result.Response,
+	}, nil
 }

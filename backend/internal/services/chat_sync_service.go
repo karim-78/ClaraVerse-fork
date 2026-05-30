@@ -493,6 +493,152 @@ func (s *ChatSyncService) DeleteAllUserChats(ctx context.Context, userID string)
 	return result.DeletedCount, nil
 }
 
+// SearchChats does a server-side full-text search across the user's chats.
+//
+// Per-user AES encryption (intentional privacy guarantee) rules out a
+// MySQL/Mongo FULLTEXT index — the ciphertext is opaque. So we list the
+// user's chats, decrypt each one's messages, scan in memory. Cost is O(n)
+// per query but n is per-user (typically tens to hundreds of conversations);
+// each chat's messages live in a single decryption call, so we trade
+// search-time CPU for not-needing a separate blind-index store.
+//
+// Returns up to `limit` hits, sorted most-recent first. Each hit includes
+// a short snippet around the match so the UI can preview without a roundtrip.
+func (s *ChatSyncService) SearchChats(ctx context.Context, userID, query string, limit int) (*models.ChatSearchResponse, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+	query = strings.TrimSpace(query)
+	if len(query) < 2 {
+		return &models.ChatSearchResponse{Query: query, Hits: []models.ChatSearchHit{}}, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	needle := strings.ToLower(query)
+
+	// Scan most recent chats first (matches user expectation: "I asked it
+	// recently"). Cap the per-user scan at 500 chats — beyond that we'd
+	// want a real index. Logs a warning if we hit the cap so we know to
+	// invest in one.
+	const maxScan = 500
+	opts := options.Find().
+		SetSort(bson.D{{Key: "updatedAt", Value: -1}}).
+		SetLimit(maxScan).
+		SetProjection(bson.M{
+			"chatId":            1,
+			"title":             1,
+			"isStarred":         1,
+			"updatedAt":         1,
+			"encryptedMessages": 1,
+		})
+
+	cursor, err := s.collection.Find(ctx, bson.M{"userId": userID}, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chats: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	hits := make([]models.ChatSearchHit, 0, limit)
+	scanned := 0
+	for cursor.Next(ctx) {
+		if len(hits) >= limit {
+			break
+		}
+		scanned++
+		var encChat models.EncryptedChat
+		if err := cursor.Decode(&encChat); err != nil {
+			continue
+		}
+
+		// Cheap title check first — avoids decrypting if the title alone
+		// matches and we have enough hits already.
+		titleMatch := strings.Contains(strings.ToLower(encChat.Title), needle)
+
+		messages, err := s.decryptMessages(userID, encChat.EncryptedMessages)
+		if err != nil {
+			if titleMatch {
+				hits = append(hits, models.ChatSearchHit{
+					ChatID:    encChat.ChatID,
+					Title:     encChat.Title,
+					IsStarred: encChat.IsStarred,
+					UpdatedAt: encChat.UpdatedAt,
+					Snippet:   encChat.Title,
+					MatchField: "title",
+				})
+			}
+			continue
+		}
+
+		// Pick the most recent matching message — most useful snippet.
+		var match *models.ChatSearchHit
+		for i := len(messages) - 1; i >= 0; i-- {
+			content := messages[i].Content
+			lc := strings.ToLower(content)
+			idx := strings.Index(lc, needle)
+			if idx < 0 {
+				continue
+			}
+			match = &models.ChatSearchHit{
+				ChatID:        encChat.ChatID,
+				Title:         encChat.Title,
+				IsStarred:     encChat.IsStarred,
+				UpdatedAt:     encChat.UpdatedAt,
+				Snippet:       snippetAround(content, idx, len(needle), 80),
+				MatchField:    "message",
+				MessageID:     messages[i].ID,
+				MessageRole:   messages[i].Role,
+				MessageIndex:  i,
+			}
+			break
+		}
+		if match != nil {
+			hits = append(hits, *match)
+		} else if titleMatch {
+			hits = append(hits, models.ChatSearchHit{
+				ChatID:     encChat.ChatID,
+				Title:      encChat.Title,
+				IsStarred:  encChat.IsStarred,
+				UpdatedAt:  encChat.UpdatedAt,
+				Snippet:    encChat.Title,
+				MatchField: "title",
+			})
+		}
+	}
+
+	if scanned >= maxScan {
+		log.Printf("⚠️ [SEARCH] Hit maxScan=%d for user %s query=%q — consider an index", maxScan, userID, query)
+	}
+
+	return &models.ChatSearchResponse{
+		Query: query,
+		Hits:  hits,
+		Total: len(hits),
+	}, nil
+}
+
+// snippetAround returns ~window chars on each side of an index into s,
+// trimmed to word-ish boundaries. Used to give the UI a quick preview.
+func snippetAround(s string, matchIdx, matchLen, window int) string {
+	start := matchIdx - window
+	if start < 0 {
+		start = 0
+	}
+	end := matchIdx + matchLen + window
+	if end > len(s) {
+		end = len(s)
+	}
+	out := s[start:end]
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(s) {
+		out = out + "…"
+	}
+	// Collapse internal whitespace to single spaces so the chip stays compact.
+	return strings.Join(strings.Fields(out), " ")
+}
+
 // decryptMessages decrypts and decompresses the encrypted messages JSON
 func (s *ChatSyncService) decryptMessages(userID, encryptedMessages string) ([]models.ChatMessage, error) {
 	if encryptedMessages == "" {

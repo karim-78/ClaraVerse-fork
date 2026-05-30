@@ -90,7 +90,7 @@ export const useArtifactStore = create<ArtifactState>()(
         }),
     }),
     {
-      name: 'claraverse-artifact-store',
+      name: 'dobbyai-artifact-store',
       // Only persist split ratio preference
       partialize: state => ({
         splitRatio: state.splitRatio,

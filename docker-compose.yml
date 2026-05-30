@@ -96,24 +96,23 @@ services:
       start_period: 15s
       retries: 3
 
-  # E2B Code Interpreter (optional - requires E2B_API_KEY)
-  # Uncomment and set E2B_API_KEY in .env to enable
-  # e2b-service:
-  #   build:
-  #     context: ./backend/e2b-service
-  #     dockerfile: Dockerfile
-  #   container_name: claraverse-e2b
-  #   environment:
-  #     - E2B_API_KEY=${E2B_API_KEY}
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health')"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     start_period: 5s
-  #     retries: 3
-  #   networks:
-  #     - claraverse-network
+  # E2B Code Interpreter (Python sandbox; uses E2B_API_KEY from root .env)
+  e2b-service:
+    build:
+      context: ./backend/e2b-service
+      dockerfile: Dockerfile
+    container_name: claraverse-e2b
+    environment:
+      - E2B_API_KEY=${E2B_API_KEY}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    networks:
+      - claraverse-network
 
   backend:
     build:

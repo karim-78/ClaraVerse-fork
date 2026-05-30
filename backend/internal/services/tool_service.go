@@ -152,7 +152,7 @@ func isUserSpecificTool(toolDef map[string]interface{}, userID string) bool {
 
 // GetAvailableToolsWithMCP returns tools filtered by credentials, but includes MCP tools
 // even if they don't have explicit integration mappings. This is used by Telegram channels
-// and routines that need access to Clara's Claw MCP tools (filesystem, git, etc.).
+// and routines that need access to Dobby's Claw MCP tools (filesystem, git, etc.).
 func (s *ToolService) GetAvailableToolsWithMCP(ctx context.Context, userID string) []map[string]interface{} {
 	allTools := s.toolRegistry.GetUserTools(userID)
 

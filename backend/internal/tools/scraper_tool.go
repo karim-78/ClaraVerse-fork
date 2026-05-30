@@ -127,7 +127,7 @@ func executeScrapWeb(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "ClaraVerse-Bot/1.0 (+https://claraverse.example.com/bot)")
+	req.Header.Set("User-Agent", "DobbyAI-Bot/1.0 (+https://dobbyai.example.com/bot)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
 	resp, err := scraperToolInstance.client.Do(req)
@@ -222,7 +222,7 @@ func checkRobots(urlStr string) (bool, error) {
 		return true, nil
 	}
 
-	group := robotsData.FindGroup("ClaraVerse-Bot")
+	group := robotsData.FindGroup("DobbyAI-Bot")
 	if group == nil {
 		group = robotsData.FindGroup("*")
 	}

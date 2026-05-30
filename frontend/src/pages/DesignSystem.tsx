@@ -74,7 +74,7 @@ export const DesignSystem = () => {
       {/* Hero Section */}
       <section className="ds-section ds-hero">
         <Typography variant="display" gradient align="center">
-          ClaraVerse Design System
+          DobbyAI Design System
         </Typography>
         <Typography variant="lg" align="center" className="ds-hero-subtitle">
           Premium Dark Theme with Rose Pink Accent
@@ -534,9 +534,9 @@ export const DesignSystem = () => {
             items={[
               {
                 id: '1',
-                title: 'What is ClaraVerse?',
+                title: 'What is DobbyAI?',
                 content:
-                  'ClaraVerse is a modern design system with a beautiful rose pink accent color.',
+                  'DobbyAI is a modern design system with a beautiful rose pink accent color.',
               },
               {
                 id: '2',
@@ -945,7 +945,7 @@ console.log(greeting);
       {/* Footer */}
       <section className="ds-footer">
         <Typography variant="sm" align="center">
-          Built with ❤️ for ClaraVerse | v1.0.0 Rose Pink Edition
+          Built with ❤️ for DobbyAI | v1.0.0 Rose Pink Edition
         </Typography>
         <Typography variant="xs" align="center">
           @badboysm890

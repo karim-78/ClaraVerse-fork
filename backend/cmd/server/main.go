@@ -46,7 +46,7 @@ func main() {
 	// Initialize structured logging (JSON in production, text in dev)
 	logging.Init()
 
-	log.Println("🚀 Starting ClaraVerse Server...")
+	log.Println("🚀 Starting DobbyAI Server...")
 
 	// Load .env file (ignore error if file doesn't exist)
 	if err := godotenv.Load(); err != nil {
@@ -283,7 +283,7 @@ func main() {
 		log.Println("✅ Channel service initialized")
 	}
 
-	// Initialize routine service (Clara's Claw scheduled routines)
+	// Initialize routine service (Dobby's Claw scheduled routines)
 	var routineService *services.RoutineService
 	if mongoDB != nil && redisService != nil {
 		var err error
@@ -393,6 +393,19 @@ func main() {
 			chatService.SetMemorySelectionService(memorySelectionService)
 			chatService.SetUserService(userService)
 			chatService.SetSettingsService(settingsService)
+
+			// Embedding service: wires Bedrock Titan v2 (or an explicit OpenAI-
+			// compatible /v1/embeddings provider via env) so the memory layer
+			// can do vector retrieval instead of LLM-only selection. Optional;
+			// memory works without it, just more expensive per turn.
+			embeddingService := services.NewEmbeddingService(
+				providerService,
+				os.Getenv("EMBEDDING_PROVIDER_URL"),
+				os.Getenv("EMBEDDING_PROVIDER_KEY"),
+			)
+			memoryStorageService.SetEmbeddingService(embeddingService)
+			memorySelectionService.SetEmbeddingService(embeddingService)
+			log.Println("✅ Embedding service initialized (vector memory retrieval)")
 		}
 
 		memoryDecayService = services.NewMemoryDecayService(mongoDB)
@@ -428,6 +441,67 @@ func main() {
 	executorRegistry := execution.NewExecutorRegistry(chatService, providerService, tools.GetRegistry(), credentialService)
 	workflowEngine := execution.NewWorkflowEngineWithChecker(executorRegistry, providerService)
 	log.Println("✅ Workflow execution engine initialized (with block checker)")
+
+	// Durable execution state store: enables per-block checkpointing, retry
+	// idempotency, and crash resume. Skipped when Mongo isn't available
+	// (engine stays in ephemeral mode — legacy behaviour). Orphan scan +
+	// resume on startup happens below in a goroutine so we don't block the
+	// HTTP listener.
+	if mongoDB != nil {
+		if stateStore, err := execution.NewMongoStateStore(mongoDB); err != nil {
+			log.Printf("⚠️ Workflow state store init failed (running ephemeral): %v", err)
+		} else {
+			workflowEngine.SetStateStore(stateStore)
+			log.Println("✅ Workflow state store wired — durable execution enabled")
+
+			// Background orphan recovery: scan once on startup for any
+			// executions still marked "running" but with stale heartbeats
+			// (we crashed mid-flight) and resume each. Idempotent — blocks
+			// that already checkpointed return their cached output.
+			go func() {
+				time.Sleep(3 * time.Second) // let the server settle
+				ctx := context.Background()
+				orphans, err := stateStore.FindOrphaned(ctx, execution.OrphanThreshold)
+				if err != nil {
+					log.Printf("⚠️ [WORKFLOW-RESUME] orphan scan failed: %v", err)
+					return
+				}
+				execution.LogStartup(orphans)
+				for _, o := range orphans {
+					o := o
+					go func() {
+						res, err := workflowEngine.ResumeExecution(context.Background(), o)
+						if err != nil {
+							log.Printf("❌ [WORKFLOW-RESUME] %s failed: %v", o.ExecutionID, err)
+							return
+						}
+						log.Printf("✅ [WORKFLOW-RESUME] %s resumed → status=%s", o.ExecutionID, res.Status)
+					}()
+				}
+			}()
+		}
+	}
+
+	// OpenTelemetry tracing for workflow executions. Reads standard
+	// OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS env vars.
+	// Without endpoint set, spans print to stdout (local dev fallback).
+	// We ALSO register a Mongo span exporter when Mongo is available so the
+	// built-in admin trace viewer always has data (no external Tempo /
+	// Jaeger needed for first-day visibility).
+	traceCfg := execution.ApplyEnvDefaults()
+	if mongoDB != nil {
+		if mongoExp, err := execution.NewMongoSpanExporter(mongoDB); err != nil {
+			log.Printf("⚠️ Mongo span exporter init failed: %v", err)
+		} else {
+			traceCfg.ExtraExporters = append(traceCfg.ExtraExporters, mongoExp)
+			log.Println("✅ Mongo span exporter wired — admin trace viewer enabled")
+		}
+	}
+	if err := execution.InitTracing(traceCfg); err != nil {
+		log.Printf("⚠️ Tracing init failed (continuing without traces): %v", err)
+	} else {
+		log.Println("✅ Workflow tracing initialized")
+	}
 
 	// Set workflow executor on scheduler and start it
 	if schedulerService != nil {
@@ -562,7 +636,7 @@ func main() {
 
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
-		AppName:        "ClaraVerse v1.0",
+		AppName:        "DobbyAI v1.0",
 		ReadTimeout:    900 * time.Second, // 15 minutes — local models (Ollama) can take 5+ min to cold start
 		WriteTimeout:   900 * time.Second, // 15 minutes — streaming responses from large local models
 		IdleTimeout:    900 * time.Second, // 15 minutes — keep connections alive during long inference
@@ -576,7 +650,7 @@ func main() {
 	app.Use(logger.New())
 
 	// Prometheus metrics middleware
-	prometheus := fiberprometheus.New("claraverse")
+	prometheus := fiberprometheus.New("dobbyai")
 	prometheus.RegisterAt(app, "/metrics")
 	app.Use(prometheus.Middleware)
 	log.Println("📊 Prometheus metrics endpoint enabled at /metrics")
@@ -776,7 +850,7 @@ func main() {
 		}
 	}
 
-	// Initialize routine handler (Clara's Claw)
+	// Initialize routine handler (Dobby's Claw)
 	var routineHandler *handlers.RoutineHandler
 	if routineService != nil {
 		routineHandler = handlers.NewRoutineHandler(routineService)
@@ -786,7 +860,7 @@ func main() {
 		if mcpBridge != nil {
 			routineHandler.SetMCPBridgeService(mcpBridge)
 		}
-		log.Println("✅ Routine handler initialized (Clara's Claw)")
+		log.Println("✅ Routine handler initialized (Dobby's Claw)")
 	}
 
 	// Initialize Nexus multi-agent system (requires MongoDB)
@@ -838,6 +912,28 @@ func main() {
 			cortexService.SetSkillService(skillService)
 		}
 
+		// Structured artifact handoff between daemons in a Nexus session.
+		// When this is wired, daemons get produce/list/read_artifact tools
+		// and the system prompt lists predecessor artifacts. Falls back to
+		// the old 4000-char text-only dep results if the store is missing.
+		if artifactStore, err := services.NewNexusArtifactStore(mongoDB); err != nil {
+			log.Printf("⚠️ Nexus artifact store init failed: %v", err)
+		} else {
+			cortexService.SetArtifactStore(artifactStore)
+			log.Println("✅ Nexus artifact store wired — structured daemon handoff enabled")
+		}
+
+		// Durability for multi-daemon orchestrations. When this is wired, every
+		// completed daemon is checkpointed to Mongo, a 10s heartbeat keeps the
+		// orphan scanner honest, and a crashed backend can resume interrupted
+		// runs at boot. Same operational shape as the workflow state store.
+		if orchStore, err := services.NewNexusOrchestrationStore(mongoDB); err != nil {
+			log.Printf("⚠️ Nexus orchestration store init failed: %v", err)
+		} else {
+			cortexService.SetNexusOrchStore(orchStore)
+			log.Println("✅ Nexus orchestration durability wired — multi-daemon runs survive crashes")
+		}
+
 		nexusWSHandler = handlers.NewNexusWebSocketHandler(
 			cortexService,
 			nexusSessionStore,
@@ -883,6 +979,35 @@ func main() {
 			log.Printf("⚠️ Failed to clear stale session state: %v", err)
 		} else if cleared > 0 {
 			log.Printf("🧹 Cleared active state from %d session(s)", cleared)
+		}
+
+		// Nexus orphan scan + auto-resume. We delay a few seconds after boot so
+		// any in-flight pod that's actually still alive gets a chance to write
+		// a fresh heartbeat — avoids us stealing a run from a sibling.
+		// Single-node deployments will never see that race; the delay is
+		// cheap insurance for future multi-node setups.
+		if orchStore := cortexService.NexusOrchStore(); orchStore != nil {
+			go func() {
+				time.Sleep(3 * time.Second)
+				scanCtx, scanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer scanCancel()
+				orphans, err := orchStore.FindOrphaned(scanCtx, services.NexusOrchOrphanThreshold)
+				if err != nil {
+					log.Printf("⚠️ [NEXUS-RESUME] orphan scan failed: %v", err)
+					return
+				}
+				services.LogNexusOrchestrationStartup(orphans)
+				for _, st := range orphans {
+					st := st // capture
+					go func() {
+						// Panic recovery lives inside ResumeOrchestration —
+						// fiber's recover middleware shadows the builtin here.
+						resumeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+						defer cancel()
+						cortexService.ResumeOrchestration(resumeCtx, st)
+					}()
+				}
+			}()
 		}
 
 		// Seed default daemon templates
@@ -1244,7 +1369,7 @@ func main() {
 			log.Println("✅ Channel routes registered")
 		}
 
-		// Clara's Claw routes (routines + status + MCP server management)
+		// Dobby's Claw routes (routines + status + MCP server management)
 		if routineHandler != nil {
 			routines := api.Group("/routines", middleware.LocalAuthMiddleware(jwtAuth))
 			routines.Get("/", routineHandler.ListRoutines)
@@ -1256,7 +1381,7 @@ func main() {
 			routines.Post("/:id/trigger", routineHandler.TriggerRoutine)
 			routines.Get("/:id/runs", routineHandler.GetRoutineRuns)
 
-			// Clara's Claw status endpoint
+			// Dobby's Claw status endpoint
 			api.Get("/claras-claw/status", middleware.LocalAuthMiddleware(jwtAuth), routineHandler.GetClawStatus)
 
 			// MCP server management (web UI -> backend -> bridge client)
@@ -1266,7 +1391,7 @@ func main() {
 			mcpServers.Put("/:name", routineHandler.UpdateMCPServer)
 			mcpServers.Delete("/:name", routineHandler.RemoveMCPServer)
 
-			log.Println("✅ Clara's Claw routes registered")
+			log.Println("✅ Dobby's Claw routes registered")
 		}
 
 		// Nexus multi-agent system routes (requires authentication + MongoDB)
@@ -1305,6 +1430,7 @@ func main() {
 			chats := api.Group("/chats", middleware.LocalAuthMiddleware(jwtAuth))
 			chats.Get("/sync", chatSyncHandler.SyncAll)             // Get all chats for initial sync (must be before /:id)
 			chats.Post("/sync", chatSyncHandler.BulkSync)           // Bulk upload chats
+			chats.Get("/search", chatSyncHandler.Search)            // Full-text search across user's chats (must be before /:id)
 			chats.Get("/", chatSyncHandler.List)                    // List chats (paginated)
 			chats.Post("/", chatSyncHandler.CreateOrUpdate)         // Create or update a chat
 			chats.Get("/:id", chatSyncHandler.Get)                  // Get single chat
@@ -1442,7 +1568,17 @@ func main() {
 				return handlers.GetE2BAPIKey(settingsService)
 			})
 
-			log.Println("✅ Admin routes registered (status, analytics, user management, providers, system models, e2b)")
+			// Built-in workflow trace viewer (admin panel "Traces" tab).
+			// Mongo-backed; available only when Mongo is wired.
+			if mongoDB != nil {
+				tracesHandler := handlers.NewTracesAdminHandler(mongoDB)
+				adminRoutes.Get("/traces", tracesHandler.List)
+				adminRoutes.Get("/traces/stats", tracesHandler.Stats)
+				adminRoutes.Get("/traces/:trace_id", tracesHandler.Get)
+				log.Println("✅ Admin trace viewer endpoints registered")
+			}
+
+			log.Println("✅ Admin routes registered (status, analytics, user management, providers, system models, e2b, traces)")
 		}
 
 	}

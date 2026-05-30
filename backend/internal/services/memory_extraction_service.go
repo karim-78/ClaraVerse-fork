@@ -40,7 +40,7 @@ const (
 )
 
 // Memory extraction system prompt
-const MemoryExtractionSystemPrompt = `You are a memory extraction system for Clara AI. Analyze this conversation and extract important information to remember about the user.
+const MemoryExtractionSystemPrompt = `You are a memory extraction system for Dobby AI. Analyze this conversation and extract important information to remember about the user.
 
 WHAT TO EXTRACT:
 1. **Personal Information**: Name, location, occupation, family, age, background
@@ -130,6 +130,13 @@ func NewMemoryExtractionService(
 func (s *MemoryExtractionService) SetSettingsService(settingsService *SettingsService) {
 	s.settingsService = settingsService
 	log.Printf("✅ [MEMORY-EXTRACTION] Settings service set for system model assignment")
+}
+
+// StorageService exposes the underlying memory storage service so the
+// chat-side memory tools (add_memory / search_memory) can read+write
+// without us adding a separate dependency on chat_service.
+func (s *MemoryExtractionService) StorageService() *MemoryStorageService {
+	return s.memoryStorageService
 }
 
 // EnqueueExtraction creates a new extraction job (non-blocking)

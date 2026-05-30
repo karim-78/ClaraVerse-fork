@@ -348,7 +348,7 @@ func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
 // GET /api/privacy-policy
 func (h *UserHandler) GetPrivacyPolicy(c *fiber.Ctx) error {
 	policy := fiber.Map{
-		"service_name": "ClaraVerse",
+		"service_name": "DobbyAI",
 		"last_updated": "2025-11-18",
 
 		"data_collected": []string{
@@ -408,8 +408,8 @@ func (h *UserHandler) GetPrivacyPolicy(c *fiber.Ctx) error {
 		},
 
 		"contact": fiber.Map{
-			"data_controller": "ClaraVerse Team",
-			"email":           "privacy@claraverse.com",
+			"data_controller": "DobbyAI Team",
+			"email":           "privacy@dobbyai.com",
 			"note":            "For privacy inquiries, data requests, or to exercise your rights",
 		},
 

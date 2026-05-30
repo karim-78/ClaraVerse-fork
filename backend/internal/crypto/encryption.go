@@ -48,7 +48,7 @@ func (e *EncryptionService) DeriveUserKey(userID string) ([]byte, error) {
 	}
 
 	// Use HKDF to derive a user-specific key
-	hkdfReader := hkdf.New(sha256.New, e.masterKey, []byte(userID), []byte("claraverse-user-encryption"))
+	hkdfReader := hkdf.New(sha256.New, e.masterKey, []byte(userID), []byte("dobbyai-user-encryption"))
 
 	userKey := make([]byte, 32) // AES-256 requires 32-byte key
 	if _, err := io.ReadFull(hkdfReader, userKey); err != nil {

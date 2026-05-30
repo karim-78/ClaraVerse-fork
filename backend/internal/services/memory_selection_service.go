@@ -17,7 +17,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// MemorySelectionService handles selection of relevant memories using LLMs
+// MemorySelectionService handles selection of relevant memories. As of
+// 2026-05 we run vector retrieval first (Bedrock Titan embeddings + cosine
+// similarity) and only fall back to LLM-only selection when no embedding
+// service is configured or the embed call fails. The vector path is
+// cheaper (no token cost per turn) and scales past 50+ memories without
+// degrading.
 type MemorySelectionService struct {
 	mongodb              *database.MongoDB
 	encryptionService    *crypto.EncryptionService
@@ -26,10 +31,11 @@ type MemorySelectionService struct {
 	chatService          *ChatService
 	settingsService      *SettingsService
 	modelPool            *MemoryModelPool // Dynamic model pool with round-robin and failover
+	embeddingService     *EmbeddingService
 }
 
 // Memory selection system prompt
-const MemorySelectionSystemPrompt = `You are a memory selection system for Clara AI. Given the user's recent conversation and their memory bank, select the MOST RELEVANT memories.
+const MemorySelectionSystemPrompt = `You are a memory selection system for Dobby AI. Given the user's recent conversation and their memory bank, select the MOST RELEVANT memories.
 
 SELECTION CRITERIA:
 1. **Direct Relevance**: Memory directly relates to current conversation topic
@@ -87,12 +93,81 @@ func NewMemorySelectionService(
 }
 
 // SetSettingsService sets the settings service for system-wide model assignments
+// buildQueryTextFromMessages concatenates the content of the most recent
+// user-side messages (skipping tool/system noise) into a single string for
+// embedding. We weight toward user turns because the model's own replies
+// are already shaped by selected memories — embedding them would create a
+// drift loop. Cap at ~2000 chars to keep Titan happy.
+func buildQueryTextFromMessages(messages []map[string]interface{}) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	const maxLen = 2000
+	var b strings.Builder
+	for i := len(messages) - 1; i >= 0 && b.Len() < maxLen; i-- {
+		role, _ := messages[i]["role"].(string)
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		content, _ := messages[i]["content"].(string)
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		if b.Len()+len(content) > maxLen {
+			b.WriteString(content[:maxLen-b.Len()])
+			break
+		}
+		b.WriteString(content)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// SetEmbeddingService wires the embedding service for the vector-first
+// selection path. Called from main.go after all services are constructed.
+func (s *MemorySelectionService) SetEmbeddingService(emb *EmbeddingService) {
+	s.embeddingService = emb
+	if emb != nil {
+		log.Printf("📐 [MEMORY-SELECTION] Embedding service attached — vector retrieval enabled")
+	}
+}
+
+// HasEmbedding reports whether vector retrieval is wired and reachable.
+// Used by the chat-side memory tools (search_memory) so they can prefer
+// the vector path when available and fall back to score-ordering otherwise.
+func (s *MemorySelectionService) HasEmbedding(ctx context.Context) bool {
+	return s.embeddingService != nil && s.embeddingService.Available(ctx)
+}
+
+// EmbedQuery is a small passthrough so callers (currently the chat
+// service's SearchMemory) don't need to hold their own EmbeddingService
+// reference. Returns the raw embedding vector.
+func (s *MemorySelectionService) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
+	if s.embeddingService == nil {
+		return nil, fmt.Errorf("embedding service not configured")
+	}
+	return s.embeddingService.Embed(ctx, query)
+}
+
 func (s *MemorySelectionService) SetSettingsService(settingsService *SettingsService) {
 	s.settingsService = settingsService
 	log.Printf("✅ [MEMORY-SELECTION] Settings service set for system model assignment")
 }
 
-// SelectRelevantMemories selects memories relevant to the current conversation
+// SelectRelevantMemories selects memories relevant to the current conversation.
+//
+// Strategy (priority order):
+//  1. **Vector retrieval** (if embedding service available): embed the last
+//     ~6 messages joined together, cosine-similarity against all active
+//     memories, take top-K. Cheap, fast, scales.
+//  2. **LLM selection** (fallback): the original path — ship every active
+//     memory to a selector model and ask it to pick. Slower + token-cost,
+//     but works without embeddings.
+//  3. **Top-N by score** (final fallback): pure score ordering. Lowest
+//     quality but always returns something useful.
 func (s *MemorySelectionService) SelectRelevantMemories(
 	ctx context.Context,
 	userID string,
@@ -125,7 +200,39 @@ func (s *MemorySelectionService) SelectRelevantMemories(
 		return activeMemories, nil
 	}
 
-	// Use LLM to select relevant memories
+	// 1. Vector retrieval path — fast, no token cost.
+	if s.embeddingService != nil && s.embeddingService.Available(ctx) {
+		queryText := buildQueryTextFromMessages(recentMessages)
+		if queryText != "" {
+			qVec, embErr := s.embeddingService.Embed(ctx, queryText)
+			if embErr == nil {
+				hits, sErr := s.memoryStorageService.SearchByEmbedding(ctx, userID, qVec, maxMemories)
+				if sErr == nil && len(hits) > 0 {
+					selected := make([]models.DecryptedMemory, 0, len(hits))
+					ids := make([]primitive.ObjectID, 0, len(hits))
+					for _, h := range hits {
+						// Drop zero-similarity hits unless we have nothing
+						// else. A zero-sim hit means the memory has no
+						// embedding (legacy) — it shouldn't displace real
+						// matches when real ones exist.
+						if h.Similarity > 0 || len(selected) == 0 {
+							selected = append(selected, h.Memory)
+							ids = append(ids, h.Memory.ID)
+						}
+					}
+					s.memoryStorageService.UpdateMemoryAccess(ctx, ids)
+					log.Printf("🎯 [MEMORY-SELECTION] Vector-selected %d memories (top sim=%.3f)",
+						len(selected), hits[0].Similarity)
+					return selected, nil
+				}
+				log.Printf("⚠️ [MEMORY-SELECTION] Vector search failed (%v) — falling back to LLM selection", sErr)
+			} else {
+				log.Printf("⚠️ [MEMORY-SELECTION] Embedding failed (%v) — falling back to LLM selection", embErr)
+			}
+		}
+	}
+
+	// 2. LLM selection path (fallback).
 	selectedIDs, reasoning, err := s.selectMemoriesWithLLM(ctx, userID, activeMemories, recentMessages, maxMemories)
 	if err != nil {
 		log.Printf("⚠️ [MEMORY-SELECTION] LLM selection failed: %v, falling back to top %d by score", err, maxMemories)

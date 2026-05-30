@@ -146,10 +146,13 @@ func (h *TriggerHandler) executeWorkflow(executionID primitive.ObjectID, workflo
 	}
 	transformedInput["__user_id__"] = userID
 
-	// Build execution options - block checker DISABLED for API triggers
-	// Block checker should only run during platform testing (WebSocket), not production API calls
+	// Build execution options - block checker DISABLED for API triggers.
+	// Forward executionID + userID so durable state checkpoints and orphan
+	// recovery work for API-triggered runs too.
 	execOptions := &execution.ExecutionOptions{
 		EnableBlockChecker: false, // Disabled for API triggers
+		ExecutionID:        executionID.Hex(),
+		UserID:             userID,
 	}
 	if opts != nil {
 		execOptions.WorkflowGoal = opts.AgentDescription
