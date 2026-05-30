@@ -118,16 +118,21 @@ export function Nexus() {
     }
   }, [connected, requestSession]);
 
-  // Authoritative task refresh from REST whenever we (re)connect or remount.
-  // Without this, the in-memory Zustand store is the only thing telling the
-  // kanban what to show — and after a refresh or navigating-away-and-back,
-  // it can be stale (or empty) until WS events trickle in. Fetching from
-  // /api/nexus/tasks gives us the canonical mongo-backed list immediately.
-  // Honors locally-deleted IDs via the store's setTasks filter so a
-  // just-deleted task doesn't flicker back.
+  // Authoritative task refresh from REST. Fires on three triggers:
+  //   1. Connection state flips to true   (WS reconnect after drop)
+  //   2. activeProjectId changes          (user switched projects)
+  //   3. Page becomes visible             (tab switched back, or app view
+  //                                        switched away+back while WS held)
+  //
+  // The visibility trigger matters because navigating between in-app views
+  // (Chat → Workflows → Nexus) unmounts/remounts the Nexus page WITHOUT
+  // dropping the WebSocket, so `connected` never flips and the
+  // [connected, activeProjectId] effect alone wouldn't re-fire. The
+  // document.visibilitychange listener catches the cross-tab case; the
+  // separate mount-time fetch (below) catches the cross-view case.
   const setTasksFromServer = useNexusStore(s => s.setTasks);
-  useEffect(() => {
-    if (!connected) return;
+  const refreshTasks = useCallback(() => {
+    if (!connected) return () => {};
     let cancelled = false;
     nexusService
       .listTasks({ limit: 100 })
@@ -135,14 +140,37 @@ export function Nexus() {
         if (!cancelled) setTasksFromServer(tasks);
       })
       .catch(err => {
-        // Log but don't surface — the WS session_state will populate as a
-        // fallback even if REST hiccups.
         console.warn('[Nexus] task list refresh failed, falling back to WS:', err);
       });
     return () => {
       cancelled = true;
     };
-  }, [connected, activeProjectId, setTasksFromServer]);
+  }, [connected, setTasksFromServer]);
+
+  // Trigger 1+2: connect / project change.
+  useEffect(() => {
+    return refreshTasks();
+  }, [connected, activeProjectId, refreshTasks]);
+
+  // Trigger 3 (cross-tab): tab visibility flipping to visible.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshTasks();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [refreshTasks]);
+
+  // Trigger 4 (cross-view-in-app): every mount of this page fires once
+  // regardless of connected/project state. Even when connected is stale-true
+  // from a held WS, leaving Nexus → coming back should re-pull.
+  useEffect(() => {
+    refreshTasks();
+    // intentionally empty deps — fires once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch projects on connect; auto-create a default if none exist
   const fetchingProjectsRef = useRef(false);

@@ -794,6 +794,19 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 			return "", nil, "", fmt.Errorf("context overflow: API error (status %d): %s", resp.StatusCode, bodyStr)
 		}
 
+		// 400-class errors usually mean we sent something the provider can't
+		// parse. Log the first 2 KiB of the body we actually sent so we can
+		// diagnose without re-running. Sliced so a 100 KB tool-result payload
+		// doesn't drown the logs; the head is where parse errors live.
+		if resp.StatusCode == http.StatusBadRequest {
+			snippet := reqJSON
+			if len(snippet) > 2048 {
+				snippet = snippet[:2048]
+			}
+			log.Printf("[DAEMON %s] 400 from %s → request body (first %d/%d bytes): %s",
+				r.instance.RoleLabel, url, len(snippet), len(reqJSON), string(snippet))
+		}
+
 		return "", nil, "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, bodyStr)
 	}
 
