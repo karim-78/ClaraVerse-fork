@@ -1150,8 +1150,30 @@ func (r *DaemonRunner) updateStatus(status models.DaemonStatus, action string, p
 	}
 }
 
-// sendUpdate sends a DaemonUpdate to the update channel (non-blocking)
+// sendUpdate sends a DaemonUpdate to the update channel (non-blocking,
+// panic-safe).
+//
+// The `select { case ch <- x: default: }` pattern handles a FULL channel,
+// but not a CLOSED one — sending to a closed channel always panics. That
+// happens here when the orchestrator has already closed updateChan
+// (because all its WaitGroup-tracked goroutines exited) but a late tool
+// callback or error handler still tries to publish. Without the deferred
+// recover the panic crashes the entire backend process — and worse, the
+// caller's own deferred panic handler may itself call sendUpdate to
+// report "panicked", re-panicking inside the recover and bypassing it.
+//
+// We swallow the panic silently here because a daemon update arriving
+// after the channel has been closed is by definition a lost message that
+// nobody can receive anyway. The corresponding task/orchestration is
+// already in a terminal state.
 func (r *DaemonRunner) sendUpdate(update DaemonUpdate) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			// chan closed; this update will not be delivered. The daemon
+			// has already exited; the orchestrator has moved on.
+		}
+	}()
+
 	update.DaemonID = r.instance.ID
 	update.Index = r.planIndex
 	update.Role = r.instance.RoleLabel
