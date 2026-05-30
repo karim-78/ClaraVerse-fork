@@ -180,6 +180,7 @@ func main() {
 
 	// Initialize agent service (requires MongoDB for scalable storage)
 	var agentService *services.AgentService
+	var workflowTemplateStore *services.WorkflowTemplateStore
 	if mongoDB != nil {
 		agentService = services.NewAgentService(mongoDB)
 		// Ensure indexes for agents, workflows, and workflow_versions
@@ -187,6 +188,18 @@ func main() {
 			log.Printf("⚠️ Failed to ensure agent indexes: %v", err)
 		}
 		log.Println("✅ Agent service initialized (MongoDB)")
+
+		// Workflow template gallery. Seeds 5 built-in templates on boot so
+		// new users have something to clone from when they hit the Workflows
+		// tab for the first time.
+		if wts, err := services.NewWorkflowTemplateStore(mongoDB, agentService); err != nil {
+			log.Printf("⚠️ Workflow template store init failed: %v", err)
+		} else {
+			workflowTemplateStore = wts
+			if err := wts.SeedDefaults(context.Background()); err != nil {
+				log.Printf("⚠️ Failed to seed workflow templates: %v", err)
+			}
+		}
 	} else {
 		log.Println("⚠️ MongoDB not available - agent builder features disabled")
 	}
@@ -1206,6 +1219,18 @@ func main() {
 
 			// Conversation memory extraction (manual trigger)
 			api.Post("/conversations/:id/extract-memories", middleware.LocalAuthMiddleware(jwtAuth), memoryHandler.TriggerMemoryExtraction)
+		}
+
+		// Workflow template gallery (auth-gated; clone needs a user identity).
+		// Public list/get; clone returns the materialised agent+workflow so the
+		// frontend can redirect into the new workflow editor.
+		if workflowTemplateStore != nil {
+			tmplHandler := handlers.NewWorkflowTemplateHandler(workflowTemplateStore)
+			tmplRoutes := api.Group("/workflow-templates", middleware.LocalAuthMiddleware(jwtAuth))
+			tmplRoutes.Get("/", tmplHandler.List)
+			tmplRoutes.Get("/:id", tmplHandler.Get)
+			tmplRoutes.Post("/:id/clone", tmplHandler.Clone)
+			log.Println("✅ Workflow template gallery routes registered")
 		}
 
 		// Agent builder routes (requires authentication + MongoDB)
