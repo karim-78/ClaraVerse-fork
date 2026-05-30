@@ -1851,14 +1851,31 @@ func (s *CortexService) handleRetryDispatch(
 	}
 }
 
-// buildRetryMessage constructs an enhanced prompt that includes the previous attempt's error context.
+// buildRetryMessage constructs an enhanced prompt that includes the
+// previous attempt's error context.
+//
+// Critical invariant: this function MUST NOT let retries grow the prompt
+// across iterations. Earlier versions inlined the full task.Error verbatim,
+// which on a provider 400 response embedded the previous error's
+// nested-JSON body (`{"error":{"message":"{\\\"error\\\":{...`). After
+// 2-3 retries the prompt body crossed the provider's content limit AND
+// the deeply-nested escapes themselves triggered downstream parse errors
+// on the LLM provider's side, producing an infinite retry loop where
+// every attempt failed for a different reason than the last.
+//
+// We now:
+//   - Strip JSON wrappers so the model sees plain English, not 9 layers
+//     of \\\\\\"
+//   - Hard-cap the surfaced error to 300 chars
+//   - Cap the previous output to 3000 chars (unchanged)
 func (s *CortexService) buildRetryMessage(task *models.NexusTask) string {
 	var sb strings.Builder
 	sb.WriteString("RETRY — Previous attempt failed. Try a different approach.\n\n")
 	sb.WriteString(fmt.Sprintf("Original request: %s\n\n", task.Prompt))
 
 	if task.Error != "" {
-		sb.WriteString(fmt.Sprintf("Previous error: %s\n\n", task.Error))
+		sb.WriteString(fmt.Sprintf("Previous error: %s\n\n",
+			sanitizeErrorForPrompt(task.Error)))
 	}
 	if task.Result != nil && task.Result.Summary != "" {
 		sb.WriteString(fmt.Sprintf("Previous attempt output (incomplete/inadequate):\n%s\n\n",
@@ -1867,6 +1884,67 @@ func (s *CortexService) buildRetryMessage(task *models.NexusTask) string {
 
 	sb.WriteString("Instructions: Address the original request completely. If the previous attempt failed due to a tool error, try different tools or approaches. Be thorough and comprehensive.")
 	return sb.String()
+}
+
+// sanitizeErrorForPrompt converts a provider error string into something
+// safe to inline into a follow-up LLM prompt:
+//
+//  1. Strips JSON braces + escape sequences (an error like `{"error":
+//     {"message":"X"}}` becomes a plain "X")
+//  2. Caps total length to 300 chars
+//
+// The goal is to give the model a human-readable hint about what went
+// wrong without ever feeding back the nested-escape garbage that crashed
+// the prompt on the first attempt. If the entire input is junk we return
+// "provider returned an error (see logs)" rather than empty so the
+// model still knows a failure happened.
+func sanitizeErrorForPrompt(raw string) string {
+	const maxLen = 300
+	// Pull every {"message":"..."} we can find and prefer the innermost.
+	// The provider error chain typically has the human-readable text
+	// buried inside several layers of wrapping.
+	clean := raw
+	for {
+		idx := strings.LastIndex(clean, `"message":"`)
+		if idx < 0 {
+			break
+		}
+		rest := clean[idx+len(`"message":"`):]
+		// Read until the next non-escaped quote.
+		end := -1
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == '"' && (i == 0 || rest[i-1] != '\\') {
+				end = i
+				break
+			}
+		}
+		if end <= 0 {
+			break
+		}
+		candidate := rest[:end]
+		// If candidate is itself a JSON wrapper, keep peeling.
+		if strings.Contains(candidate, `{"error"`) {
+			clean = candidate
+			continue
+		}
+		clean = candidate
+		break
+	}
+	// Unescape the common JSON sequences in place so the model sees
+	// normal text. Don't bother with a full unescape pass — the rough
+	// version below covers the cases we hit in practice.
+	clean = strings.ReplaceAll(clean, `\\"`, `"`)
+	clean = strings.ReplaceAll(clean, `\\n`, " ")
+	clean = strings.ReplaceAll(clean, `\"`, `"`)
+	clean = strings.ReplaceAll(clean, `\n`, " ")
+	clean = strings.TrimSpace(clean)
+	if clean == "" {
+		return "provider returned an error (see logs)"
+	}
+	if len(clean) > maxLen {
+		clean = clean[:maxLen] + "…"
+	}
+	return clean
 }
 
 // extractJSONFromLLM extracts a JSON object from a string that may contain markdown code blocks
