@@ -173,11 +173,11 @@ func (s *NexusArtifactStore) Read(ctx context.Context, sessionID primitive.Objec
 // caller can render a picker without paying for the body. Sorted most-
 // recent first.
 type NexusArtifactSummary struct {
-	Name        string    `json:"name"`
-	ContentType string    `json:"content_type"`
-	Summary     string    `json:"summary,omitempty"`
-	SizeBytes   int       `json:"size_bytes"`
-	CreatedAt   time.Time `json:"created_at"`
+	Name        string    `bson:"name" json:"name"`
+	ContentType string    `bson:"content_type" json:"content_type"`
+	Summary     string    `bson:"summary,omitempty" json:"summary,omitempty"`
+	SizeBytes   int       `bson:"size_bytes" json:"size_bytes"`
+	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
 }
 
 func (s *NexusArtifactStore) List(ctx context.Context, sessionID primitive.ObjectID) ([]NexusArtifactSummary, error) {
