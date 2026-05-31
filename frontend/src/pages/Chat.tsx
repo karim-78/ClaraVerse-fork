@@ -2040,9 +2040,13 @@ export const Chat = () => {
         // turn (the store no-ops when there's no draft to promote).
         knowledgeStorePromote(currentChatId);
 
-        // Re-read so we pick up the just-promoted IDs in case this
-        // was the chat's first send.
-        const knowledgeIdsForTurn = knowledgeStoreGet(currentChatId);
+        // Re-read directly off the store (not via the subscribed
+        // selector) so we pick up the just-promoted IDs in case
+        // this was the chat's first send. getState() reads the
+        // current snapshot without subscribing — no re-render
+        // bookkeeping needed at this call site.
+        const knowledgeIdsForTurn =
+          useChatKnowledgeStore.getState().selections[currentChatId] ?? [];
 
         websocketService.sendMessageWithHistory(
           messageToSend,
