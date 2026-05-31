@@ -999,6 +999,18 @@ func main() {
 		} else if cleared > 0 {
 			log.Printf("🧹 Cleared active state from %d session(s)", cleared)
 		}
+		// Sweep tasks stuck in non-terminal states (pending/executing/
+		// waiting_input) from a previous run. Without this, every crash
+		// leaves zombie cards in the kanban that users see as "queued
+		// but never starting" because the daemon process that owned them
+		// is gone. 5-minute threshold matches the daemon orphan-heartbeat
+		// window — anything older AND still non-terminal is definitely
+		// dead, not just slow.
+		if swept, err := nexusTaskStore.CleanupStaleTasks(ctx, 5*time.Minute); err != nil {
+			log.Printf("⚠️ Failed to cleanup stale tasks: %v", err)
+		} else if swept > 0 {
+			log.Printf("🧹 Marked %d stuck task(s) as failed from previous run", swept)
+		}
 
 		// Nexus orphan scan + auto-resume. We delay a few seconds after boot so
 		// any in-flight pod that's actually still alive gets a chance to write

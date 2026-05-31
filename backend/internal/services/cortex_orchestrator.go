@@ -852,24 +852,35 @@ func (s *CortexService) orchestrateMultiDaemon(
 			for idx, plan := range pending {
 				if allDepsMet(plan.DependsOn, completed) {
 					depResults := collectResults(plan.DependsOn, completed, plans)
-					delete(pending, idx)
 
-					if s.acquireDaemonSlot(userID) {
-						pendingDaemon := daemons[idx]
-						_ = s.sessionStore.AddActiveDaemon(ctx, userID, pendingDaemon.ID)
-
-						s.publish(userID, "daemon_deployed", map[string]interface{}{
-							"daemon_id":    pendingDaemon.ID,
-							"task_id":      parentTaskID,
-							"role":         pendingDaemon.Role,
-							"role_label":   pendingDaemon.RoleLabel,
-							"task_summary": plan.TaskSummary,
-						})
-
-						wg.Add(1)
-						s.launchDaemon(ctx, userID, pendingDaemon, idx, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans)
-						running++
+					if !s.acquireDaemonSlot(userID) {
+						// At per-user daemon cap — DO NOT delete from
+						// pending. Leaving it in pending means the NEXT
+						// completion event re-evaluates it and tries to
+						// launch again once a slot frees up. The previous
+						// code deleted it unconditionally, which silently
+						// orphaned the daemon and left its sub-task stuck
+						// in "pending" forever.
+						log.Printf("[CORTEX] At daemon cap for user %s — daemon %d (%s) deferred until a slot frees",
+							userID, idx, plan.RoleLabel)
+						continue
 					}
+
+					delete(pending, idx)
+					pendingDaemon := daemons[idx]
+					_ = s.sessionStore.AddActiveDaemon(ctx, userID, pendingDaemon.ID)
+
+					s.publish(userID, "daemon_deployed", map[string]interface{}{
+						"daemon_id":    pendingDaemon.ID,
+						"task_id":      parentTaskID,
+						"role":         pendingDaemon.Role,
+						"role_label":   pendingDaemon.RoleLabel,
+						"task_summary": plan.TaskSummary,
+					})
+
+					wg.Add(1)
+					s.launchDaemon(ctx, userID, pendingDaemon, idx, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans)
+					running++
 				}
 			}
 			mu.Unlock()
@@ -892,9 +903,37 @@ func (s *CortexService) orchestrateMultiDaemon(
 
 		mu.Lock()
 		allDone := running == 0 && len(pending) == 0
+		stuckPending := running == 0 && len(pending) > 0
 		mu.Unlock()
 
 		if allDone {
+			break
+		}
+
+		// Deadlock guard: if nothing is running but pending daemons exist,
+		// it's because they couldn't acquire a daemon slot last try (cap
+		// held by a sibling orchestration). Without intervention the
+		// outer `for update := range updateChan` would block forever
+		// waiting for an update that never arrives. Fail the stuck plans
+		// with a clear reason so the synthesis can still produce a partial
+		// result from whatever DID complete.
+		if stuckPending {
+			mu.Lock()
+			stuckIDs := make([]int, 0, len(pending))
+			for idx := range pending {
+				stuckIDs = append(stuckIDs, idx)
+			}
+			for _, idx := range stuckIDs {
+				plan := pending[idx]
+				delete(pending, idx)
+				if daemon, ok := daemons[idx]; ok {
+					_ = s.taskStore.SetError(ctx, userID, daemon.TaskID,
+						"daemon never started — at per-user concurrency cap with no slot freeing up")
+				}
+				log.Printf("[CORTEX] Marking pending daemon %d (%s) as failed — no slot available",
+					idx, plan.RoleLabel)
+			}
+			mu.Unlock()
 			break
 		}
 	}

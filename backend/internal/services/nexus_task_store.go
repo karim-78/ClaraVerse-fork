@@ -25,6 +25,43 @@ func NewNexusTaskStore(mongodb *database.MongoDB) *NexusTaskStore {
 	}
 }
 
+// CleanupStaleTasks marks tasks stuck in non-terminal states from a prior
+// backend run as failed. Without this, tasks that were executing when the
+// backend died stay in "executing" or "pending" forever, polluting the
+// kanban and confusing users about "queued tasks never starting".
+//
+// Threshold: any task with status in {pending, queued, executing, waiting_input}
+// that was last updated more than `staleAfter` ago is considered orphaned.
+// We use updatedAt (heartbeat-ish) rather than createdAt so a long-running
+// but still-alive task that updated recently isn't swept.
+//
+// Returns the number of tasks updated.
+func (s *NexusTaskStore) CleanupStaleTasks(ctx context.Context, staleAfter time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-staleAfter)
+	filter := bson.M{
+		"status": bson.M{"$in": []string{
+			string(models.NexusTaskStatusPending),
+			string(models.NexusTaskStatusExecuting),
+			string(models.NexusTaskStatusWaitingInput),
+		}},
+		// Either updatedAt is missing (very old record) or older than cutoff.
+		"$or": []bson.M{
+			{"updatedAt": bson.M{"$lt": cutoff}},
+			{"updatedAt": bson.M{"$exists": false}},
+		},
+	}
+	update := bson.M{"$set": bson.M{
+		"status":    string(models.NexusTaskStatusFailed),
+		"error":     "backend restarted before this task completed",
+		"updatedAt": time.Now().UTC(),
+	}}
+	res, err := s.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup stale tasks: %w", err)
+	}
+	return res.ModifiedCount, nil
+}
+
 // Create inserts a new task
 func (s *NexusTaskStore) Create(ctx context.Context, task *models.NexusTask) error {
 	now := time.Now()
