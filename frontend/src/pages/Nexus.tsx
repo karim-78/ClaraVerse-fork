@@ -6,6 +6,7 @@ import { DaemonsView } from '@/components/nexus/DaemonsView';
 import { RoutinesView } from '@/components/nexus/RoutinesView';
 import { SettingsView } from '@/components/nexus/SettingsView';
 import { SavesView } from '@/components/nexus/SavesView';
+import { KnowledgeView } from '@/components/nexus/KnowledgeView';
 import { TaskDetailPanel } from '@/components/nexus/TaskDetailPanel';
 import { FloatingTaskBar } from '@/components/nexus/FloatingTaskBar';
 import { NexusSidebar } from '@/components/nexus/NexusSidebar';
@@ -502,6 +503,8 @@ export function Nexus() {
         {activeView === 'settings' && <SettingsView send={send} />}
 
         {activeView === 'saves' && <SavesView />}
+
+        {activeView === 'knowledge' && <KnowledgeView />}
       </main>
 
       {showProjectForm && (

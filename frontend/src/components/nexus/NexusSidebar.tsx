@@ -193,6 +193,16 @@ export function NexusSidebar({
     // Utilities
     items.push(
       {
+        id: 'knowledge',
+        label: 'Knowledge',
+        icon: BookOpen,
+        // Knowledge is per-project — gated on having a project selected.
+        // The view component itself shows a "pick a project" hint when
+        // not, but greying the sidebar entry keeps the affordance honest.
+        isActive: activeView === 'knowledge',
+        onClick: () => setActiveView('knowledge'),
+      },
+      {
         id: 'saves',
         label: 'Saved',
         icon: Bookmark,

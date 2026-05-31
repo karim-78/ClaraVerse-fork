@@ -14,7 +14,7 @@ import type {
   DaemonTemplate,
 } from '@/types/nexus';
 
-export type NexusView = 'project' | 'daemons' | 'routines' | 'settings' | 'saves';
+export type NexusView = 'project' | 'daemons' | 'routines' | 'settings' | 'saves' | 'knowledge';
 export type RightPanel = 'none' | 'task-detail';
 
 interface NexusState {

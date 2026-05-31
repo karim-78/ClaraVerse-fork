@@ -17,6 +17,7 @@ import (
 	"claraverse/internal/models"
 	"claraverse/internal/preflight"
 	"claraverse/internal/services"
+	"claraverse/internal/services/rag"
 	"claraverse/internal/tools"
 	"claraverse/pkg/auth"
 	"context"
@@ -885,6 +886,10 @@ func main() {
 	var cortexService *services.CortexService
 	var nexusTaskStore *services.NexusTaskStore
 	var nexusSessionStore *services.NexusSessionStore
+	// ragService is wired alongside Nexus (knowledge bases are
+	// per-project, projects live in the Nexus surface) but the
+	// knowledge HTTP routes are registered separately further down.
+	var ragService *rag.Service
 	if mongoDB != nil {
 		nexusTaskStore = services.NewNexusTaskStore(mongoDB)
 		if routineHandler != nil {
@@ -974,6 +979,23 @@ func main() {
 			nexusProjectStore,
 			nexusSaveStore,
 		)
+
+		// RAG knowledge bases (per project). Vector store = Qdrant
+		// sidecar; embedder = FastEmbed sidecar. Both URLs come from
+		// env so deployments can point at managed services if they
+		// want. Service starts its background ingest worker on first
+		// upload (and we don't proactively start it here so a missing
+		// sidecar at boot doesn't break startup).
+		qdrantURL := os.Getenv("QDRANT_URL")
+		if qdrantURL == "" {
+			qdrantURL = "http://localhost:6333"
+		}
+		embeddingsURL := os.Getenv("EMBEDDINGS_SERVICE_URL")
+		if embeddingsURL == "" {
+			embeddingsURL = "http://localhost:8002"
+		}
+		ragService = rag.NewService(mongoDB, qdrantURL, embeddingsURL, "./uploads")
+		log.Printf("🔎 RAG wired — qdrant=%s embeddings=%s", qdrantURL, embeddingsURL)
 
 		// Wire sync services into MCP WebSocket handler for TUI ↔ cloud sync
 		mcpWSHandler.SetSyncServices(engramService, personaService, nexusEventBus, nexusSessionStore)
@@ -1479,6 +1501,23 @@ func main() {
 			}
 
 			log.Println("✅ Nexus routes registered")
+		}
+
+		// RAG knowledge-base routes. Project-scoped under the same auth
+		// guard as Nexus. The Knowledge tab in the project view talks to
+		// these; the search_knowledge tool talks to rag.Service directly
+		// (no HTTP hop). Mounted outside the nexus group because the
+		// path is /api/projects/:id/knowledge — projects are a shared
+		// concept, not exclusively a nexus surface.
+		if ragService != nil {
+			knowledgeHandler := handlers.NewKnowledgeHandler(ragService)
+			kb := api.Group("/projects/:project_id/knowledge", middleware.LocalAuthMiddleware(jwtAuth))
+			kb.Get("/files", knowledgeHandler.ListFiles)
+			kb.Post("/files", knowledgeHandler.UploadFile)
+			kb.Delete("/files/:file_id", knowledgeHandler.DeleteFile)
+			kb.Post("/search", knowledgeHandler.Search)
+			api.Get("/knowledge/health", middleware.LocalAuthMiddleware(jwtAuth), knowledgeHandler.Health)
+			log.Println("✅ Knowledge (RAG) routes registered")
 		}
 
 		// Chat sync routes (requires authentication + chat sync service)

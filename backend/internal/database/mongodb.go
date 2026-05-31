@@ -52,6 +52,12 @@ const (
 	CollectionNexusDaemonTemplates = "nexus_daemon_templates"
 	CollectionNexusProjects        = "nexus_projects"
 	CollectionNexusSaves           = "nexus_saves"
+
+	// RAG knowledge-base collections (project-scoped vector stores).
+	// Vectors themselves live in Qdrant — Mongo holds file metadata,
+	// per-project collection bookkeeping, and ingest job state.
+	CollectionNexusKnowledgeFiles       = "nexus_knowledge_files"
+	CollectionNexusKnowledgeCollections = "nexus_knowledge_collections"
 )
 
 // NewMongoDB creates a new MongoDB connection with connection pooling
