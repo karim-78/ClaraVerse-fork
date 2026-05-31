@@ -74,6 +74,13 @@ type DaemonRunner struct {
 	contextBuilder  *CortexContextBuilder
 	toolSelector    *CortexToolSelector
 	artifactStore   *NexusArtifactStore // optional; enables produce/list/read_artifact tools
+
+	// multiDaemonCtx is non-nil iff this daemon is part of a multi-daemon
+	// orchestration. When set, the system prompt explicitly teaches the
+	// daemon to use produce_artifact / read_artifact for cross-daemon
+	// handoff — without it the model defaults to summary-only handoff and
+	// the structured store sits unused.
+	multiDaemonCtx *MultiDaemonContext
 }
 
 // DaemonRunnerConfig holds configuration for creating a DaemonRunner
@@ -97,6 +104,7 @@ type DaemonRunnerConfig struct {
 	ProjectInstruction string                     // System instruction from the containing project
 	SkillIDs           []primitive.ObjectID        // Skills attached to this daemon
 	ContextWindow      int                        // Model context window in tokens (0 = default 128K)
+	MultiDaemonCtx     *MultiDaemonContext        // Non-nil when this is part of a multi-daemon orchestration
 }
 
 // NewDaemonRunner creates and configures a new daemon runner
@@ -120,6 +128,7 @@ func NewDaemonRunner(cfg DaemonRunnerConfig) *DaemonRunner {
 		originalMessage:    cfg.OriginalMessage,
 		projectInstruction: cfg.ProjectInstruction,
 		skillIDs:           cfg.SkillIDs,
+		multiDaemonCtx:     cfg.MultiDaemonCtx,
 		updateChan:         cfg.UpdateChan,
 		cancelCtx:          ctx,
 		cancelFunc:         cancel,
@@ -269,7 +278,10 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 		listCancel()
 	}
 
-	// 1. Build system prompt using the task description (summary for context)
+	// 1. Build system prompt using the task description (summary for context).
+	// multiCtx is set when this daemon is part of a multi-daemon orchestration;
+	// the orchestrator passes it via the runner config. When set, the prompt
+	// teaches the daemon to use produce_artifact for cross-daemon handoff.
 	systemPrompt := r.contextBuilder.BuildDaemonSystemPrompt(
 		ctx,
 		r.instance.Role,
@@ -279,6 +291,7 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 		r.instance.DependencyResults,
 		r.projectInstruction,
 		r.skillIDs,
+		r.multiDaemonCtx,
 	)
 	if len(artifactsAvailable) > 0 {
 		systemPrompt += buildArtifactCatalogue(artifactsAvailable)

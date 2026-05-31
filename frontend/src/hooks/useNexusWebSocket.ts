@@ -8,6 +8,7 @@ import type {
 } from '@/types/nexus';
 import { useNexusStore } from '@/store/useNexusStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { toast } from '@/store/useToastStore';
 import { getWsUrl } from '@/lib/config';
 
 const WS_URL = getWsUrl();
@@ -15,6 +16,13 @@ const WS_ENDPOINT = '/ws/nexus';
 const HEARTBEAT_INTERVAL = 25000;
 const MAX_RECONNECT_DELAY = 30000;
 const MAX_RECONNECT_ATTEMPTS = 15;
+
+// truncateForToast keeps the completion toast readable. Full result lives in
+// the task panel; the toast is just the "look over here" nudge.
+function truncateForToast(s: string, max = 140): string {
+  const trimmed = s.trim().replace(/\s+/g, ' ');
+  return trimmed.length > max ? trimmed.slice(0, max - 1) + '…' : trimmed;
+}
 
 type MessageHandler = (msg: NexusServerMessage) => void;
 
@@ -244,6 +252,16 @@ export function useNexusWebSocket() {
             }
             updateTask({ ...d, status: 'completed' });
             setIsProcessing(false);
+            // Toast so the user notices completion without manually scanning the
+            // kanban — Nexus tasks finish in the background and previously the
+            // only signal was the card silently moving to the (often collapsed)
+            // Done column.
+            toast.success(
+              resultSummary
+                ? truncateForToast(resultSummary)
+                : 'Click the task card to view results.',
+              'Task complete'
+            );
           }
           break;
 
@@ -513,12 +531,32 @@ export function useNexusWebSocket() {
     };
   }, []);
 
-  // Auto-connect/disconnect on auth token change
+  // Auto-connect/disconnect on auth token change.
+  //
+  // React 18 StrictMode double-mounts effects in dev: mount → cleanup → mount.
+  // The naive `return () => disconnect()` causes the WS to open, immediately
+  // close (during the first cleanup), then reopen on the second mount —
+  // visible in backend logs as `Connection opened ... Connection closed ...
+  // Connection opened` within ~12ms, and visible to users as tasks briefly
+  // disappearing on tab switch / page navigation.
+  //
+  // Fix: defer disconnect by 100 ms with a generation guard. If a remount
+  // happens within that window (the StrictMode case), the deferred disconnect
+  // detects the new generation and bails. In production (no StrictMode
+  // remount), the disconnect fires normally.
+  const mountGenRef = useRef(0);
   useEffect(() => {
-    if (authToken) {
-      connect();
-    }
-    return () => disconnect();
+    if (!authToken) return;
+    mountGenRef.current += 1;
+    const thisGen = mountGenRef.current;
+    connect();
+    return () => {
+      setTimeout(() => {
+        if (mountGenRef.current === thisGen) {
+          disconnect();
+        }
+      }, 100);
+    };
   }, [authToken, connect, disconnect]);
 
   // Re-poll session state when browser tab resumes (e.g. after PC sleep/wake)

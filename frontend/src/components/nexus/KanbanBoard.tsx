@@ -51,8 +51,11 @@ export const KanbanBoard = memo(function KanbanBoard({
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < MOBILE_BREAKPOINT
   );
+  // 'done' is expanded by default — completed tasks were getting hidden,
+  // making users think the system didn't finish anything. They can collapse
+  // manually if the column grows long.
   const [expandedColumns, setExpandedColumns] = useState<Set<string>>(
-    () => new Set(['working', 'queued'])
+    () => new Set(['working', 'queued', 'done'])
   );
 
   // Track mobile breakpoint

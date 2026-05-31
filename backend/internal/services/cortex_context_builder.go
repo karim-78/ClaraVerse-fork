@@ -111,7 +111,39 @@ func (b *CortexContextBuilder) BuildCortexSystemPrompt(
 	return sb.String(), nil
 }
 
-// BuildDaemonSystemPrompt assembles the system prompt for a specific daemon
+// MultiDaemonContext captures everything a daemon needs to know about its
+// position in a larger orchestration. Empty/zero values mean this daemon
+// is running solo (single-daemon mode); a non-empty value triggers the
+// handoff instructions in the system prompt.
+//
+// The orchestrator owns this — daemons don't infer it. That keeps the
+// "are we in multi-daemon?" decision in one place.
+type MultiDaemonContext struct {
+	// PlanIndex is this daemon's index in the plans slice (0-based).
+	PlanIndex int
+	// TotalDaemons is len(plans) — used for "daemon 1 of 3" framing.
+	TotalDaemons int
+	// HasDownstream is true if at least one other plan has this daemon's
+	// index in its DependsOn. Tells this daemon "produce artifacts because
+	// someone else will read them".
+	HasDownstream bool
+	// DownstreamRoles names the dependent daemons so the prompt can say
+	// "the Writer daemon depends on your output — produce an artifact
+	// it can read".
+	DownstreamRoles []string
+	// SuggestedArtifactName is what the orchestrator wants this daemon to
+	// produce, derived from its role (e.g. "research-brief" for a
+	// researcher). Empty if no preference — the daemon picks the name.
+	SuggestedArtifactName string
+}
+
+// BuildDaemonSystemPrompt assembles the system prompt for a specific daemon.
+//
+// multi is non-nil only when this daemon is part of a multi-daemon
+// orchestration. When set, the prompt explicitly teaches the daemon to
+// use produce_artifact / read_artifact for cross-daemon handoff —
+// without this instruction the model defaults to dumping output into
+// its 4000-char text summary, which downstream daemons can't fully use.
 func (b *CortexContextBuilder) BuildDaemonSystemPrompt(
 	ctx context.Context,
 	role string,
@@ -121,18 +153,52 @@ func (b *CortexContextBuilder) BuildDaemonSystemPrompt(
 	dependencyResults map[string]string,
 	projectInstruction string,
 	skillIDs []primitive.ObjectID,
+	multi *MultiDaemonContext,
 ) string {
 	var sb strings.Builder
 
 	// 1. Role persona
 	sb.WriteString(fmt.Sprintf("You are a %s Daemon — %s\n\n", roleLabel, persona))
 
-	// 2. Task goal
+	// 2. Multi-daemon orchestration position. Comes early because it
+	// shapes *how* the daemon should approach the task — produce
+	// structured artifacts vs just summarising.
+	if multi != nil {
+		sb.WriteString("## Orchestration Context\n\n")
+		sb.WriteString(fmt.Sprintf("You are daemon %d of %d in a multi-agent orchestration.\n",
+			multi.PlanIndex+1, multi.TotalDaemons))
+		if multi.HasDownstream {
+			if len(multi.DownstreamRoles) > 0 {
+				sb.WriteString(fmt.Sprintf("Downstream daemons that depend on your output: %s.\n",
+					strings.Join(multi.DownstreamRoles, ", ")))
+			} else {
+				sb.WriteString("At least one downstream daemon depends on your output.\n")
+			}
+			suggested := multi.SuggestedArtifactName
+			if suggested == "" {
+				suggested = role + "-output"
+			}
+			sb.WriteString(fmt.Sprintf(
+				"**CRITICAL — Hand off your work via artifacts.** Do NOT rely on the text "+
+					"summary alone (it's capped at ~4000 chars and loses structure). When you have "+
+					"your main output ready, call:\n\n"+
+					"  produce_artifact(name=\"%s\", content_type=\"markdown\", content=<full output>, summary=<one-line>)\n\n"+
+					"Downstream daemons will see the artifact in their catalogue and call "+
+					"read_artifact(\"%s\") to pull the full body. Without this, they have to "+
+					"guess from your summary and the orchestration loses its value.\n",
+				suggested, suggested))
+		} else {
+			sb.WriteString("You are the final daemon in this chain. Your output goes directly to the user via synthesis.\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// 3. Task goal
 	sb.WriteString("## Your Task\n\n")
 	sb.WriteString(taskSummary)
 	sb.WriteString("\n\n")
 
-	// 3. Dependency results (from predecessor daemons)
+	// 4. Dependency results (from predecessor daemons)
 	// Cap each to 4000 chars (head 2000 + tail 1500) to prevent system prompt bloat
 	if len(dependencyResults) > 0 {
 		sb.WriteString("## Previous Daemon Results\n\n")
@@ -140,30 +206,46 @@ func (b *CortexContextBuilder) BuildDaemonSystemPrompt(
 			capped := capDependencyResult(result, 4000)
 			sb.WriteString(fmt.Sprintf("### %s\n%s\n\n", label, capped))
 		}
-		sb.WriteString("Use the results above to inform your work.\n\n")
+		sb.WriteString("Use the results above to inform your work. " +
+			"If their full output is available as an artifact (see catalogue below), " +
+			"prefer read_artifact to get the complete data — these summaries are capped.\n\n")
 	}
 
-	// 4. Active skills — inject behavioral instructions from attached skills
+	// 5. Active skills — inject behavioral instructions from attached skills
 	skillSection, _ := b.BuildSkillsSection(ctx, skillIDs)
 	if skillSection != "" {
 		sb.WriteString(skillSection)
 		sb.WriteString("\n\n")
 	}
 
-	// 5. Project-level instructions
+	// 6. Project-level instructions
 	if projectInstruction != "" {
 		sb.WriteString("## Project Instructions\n\n")
 		sb.WriteString(projectInstruction)
 		sb.WriteString("\n\n")
 	}
 
-	// 6. Behavioral instructions
+	// 7. Behavioral instructions
 	sb.WriteString("## Instructions\n\n")
 	sb.WriteString("- Use available tools to accomplish your task\n")
 	sb.WriteString("- Be thorough but efficient — do not repeat work unnecessarily\n")
 	sb.WriteString("- When your task is complete, provide a clear summary of what you accomplished\n")
 	sb.WriteString("- If you need information you cannot obtain, state what's missing\n")
 	sb.WriteString("- If you encounter errors, retry with a different approach before giving up\n")
+	if multi != nil && multi.HasDownstream {
+		sb.WriteString("- Before finishing: confirm you called produce_artifact with your main output\n")
+	}
+	// Auto-nudge for document-producing tasks. The classifier doesn't
+	// currently set a "deliver_pdf" flag so we infer from the task text.
+	// Cheap heuristic — false positives just give the model an unused tool.
+	taskLower := strings.ToLower(taskSummary)
+	if strings.Contains(taskLower, "pdf") || strings.Contains(taskLower, "report") ||
+		strings.Contains(taskLower, "document") || strings.Contains(taskLower, "presentation") ||
+		strings.Contains(taskLower, "deliverable") {
+		sb.WriteString("- If your output is meant to be a downloadable file (PDF/report/document), " +
+			"call html_to_pdf(html=<rendered HTML>, filename=<name>.pdf) and include the returned " +
+			"file path in your summary so the user can download it\n")
+	}
 
 	return sb.String()
 }
@@ -213,12 +295,32 @@ STATUS: The user is asking about progress, status, or whether something is done.
 QUICK: Simple questions, greetings, lookups, conversational responses.
   Examples: "what time is it", "hello", "thanks", "what did I do today"
 
-DAEMON: Tasks requiring tools, research, or multiple steps.
+DAEMON: A SINGLE atomic task that one specialist can complete. ONE verb on ONE target.
   Examples: "research Q4 sales", "draft an email to John", "find flights to Tokyo"
+  NOT examples: anything with "and then", anything that ends with "create a PDF" / "make a report"
 
-MULTI_DAEMON: Complex tasks with multiple distinct sub-tasks that benefit from parallel work.
-  Examples: "research competitors AND draft a report", "analyze data and create a presentation"
-  Key signal: the request contains multiple distinct objectives (often connected by "and", "then", "also")
+MULTI_DAEMON: ANY task with two or more distinct verbs/outputs. **Default to this when there is even a hint of multiple steps** — it is much cheaper to spin up a 2-daemon plan that finishes well than to ask one daemon to do too much.
+
+  Triggers that REQUIRE multi_daemon (do not classify these as daemon):
+    - "research X and write/create/make Y"
+    - "find X, then format/summarize/email"
+    - "scrape/fetch/gather X and produce a report/PDF/slide deck/document"
+    - "compare A and B and write up the differences"
+    - "analyze X and create a presentation/PDF/email"
+    - "X and Y" where X and Y are different verbs (research+write, analyze+notify, fetch+save, etc.)
+
+  Common pattern — research-then-author:
+    "research <topic> and create a PDF" →
+      multi_daemon: [
+        researcher (no deps) — gather the data, produce an artifact named "<topic>-research",
+        writer (depends_on: [0]) — read the research artifact, produce the final document with html_to_pdf
+      ]
+
+  Common pattern — fetch-then-notify:
+    "check today's calendar and send me a summary on Slack" →
+      multi_daemon: [
+        fetcher, notifier (depends_on: [0])
+      ]
 
 `)
 
@@ -245,7 +347,11 @@ MULTI_DAEMON: Complex tasks with multiple distinct sub-tasks that benefit from p
 		}
 	}
 
-	sb.WriteString(`IMPORTANT: When in doubt between quick and daemon, choose DAEMON. When the task has multiple parts, choose MULTI_DAEMON. If daemons are active and the user asks about progress, choose STATUS.
+	sb.WriteString(`IMPORTANT TIE-BREAKING RULES:
+- When in doubt between quick and daemon, choose DAEMON.
+- When in doubt between daemon and multi_daemon, choose MULTI_DAEMON. (A 2-daemon plan that's overkill is better UX than a single daemon trying to do two things badly.)
+- If the request mentions producing a file or document (PDF, report, slides, doc), it ALMOST CERTAINLY needs at least 2 daemons: one to gather/decide content, one to produce the file.
+- If daemons are active and the user asks about progress, choose STATUS.
 
 For status mode, respond with:
 {"mode": "status"}

@@ -783,7 +783,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 			})
 
 			wg.Add(1)
-			s.launchDaemon(ctx, userID, daemon, plan.Index, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg)
+			s.launchDaemon(ctx, userID, daemon, plan.Index, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans)
 			mu.Lock()
 			running++
 			mu.Unlock()
@@ -796,7 +796,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 	// nothing launched, so go straight to synthesis.
 	if running == 0 && len(pending) == 0 {
 		close(updateChan)
-		s.finishOrchestration(ctx, userID, parentTaskID, modelID, completed, plans, isRoutine, NexusOrchStatusCompleted)
+		s.finishOrchestration(ctx, userID, sessionID, parentTaskID, modelID, completed, plans, isRoutine, NexusOrchStatusCompleted)
 		return
 	}
 
@@ -867,7 +867,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 						})
 
 						wg.Add(1)
-						s.launchDaemon(ctx, userID, pendingDaemon, idx, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg)
+						s.launchDaemon(ctx, userID, pendingDaemon, idx, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans)
 						running++
 					}
 				}
@@ -904,7 +904,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 	if len(completed) == 0 {
 		status = NexusOrchStatusFailed
 	}
-	s.finishOrchestration(ctx, userID, parentTaskID, modelID, completed, plans, isRoutine, status)
+	s.finishOrchestration(ctx, userID, sessionID, parentTaskID, modelID, completed, plans, isRoutine, status)
 }
 
 // runOrchestrationHeartbeat pings the state store every NexusOrchHeartbeatInterval
@@ -935,6 +935,7 @@ func (s *CortexService) runOrchestrationHeartbeat(
 func (s *CortexService) finishOrchestration(
 	ctx context.Context,
 	userID string,
+	sessionID primitive.ObjectID,
 	parentTaskID primitive.ObjectID,
 	modelID string,
 	completed map[int]*DaemonResult,
@@ -942,7 +943,7 @@ func (s *CortexService) finishOrchestration(
 	isRoutine bool,
 	status NexusOrchestrationStatus,
 ) {
-	s.synthesizeResults(ctx, userID, parentTaskID, modelID, completed, plans, isRoutine)
+	s.synthesizeResults(ctx, userID, sessionID, parentTaskID, modelID, completed, plans, isRoutine)
 	if s.nexusOrchStore != nil {
 		// Find the session id for the mark-completed write. Cheapest way is to
 		// pull it from any daemon doc, but synthesizeResults already wrote the
@@ -1021,8 +1022,59 @@ func (s *CortexService) ResumeOrchestration(ctx context.Context, state NexusOrch
 	)
 }
 
+// buildMultiDaemonContext derives the per-daemon orchestration context
+// from the full plan list. Returns nil if there's only one plan (single-
+// daemon mode — no handoff needed). Otherwise computes:
+//   - this daemon's downstream consumers (other plans that DependsOn it)
+//   - a suggested artifact name derived from this daemon's role
+func buildMultiDaemonContext(planIndex int, plans []DaemonPlan) *MultiDaemonContext {
+	if len(plans) <= 1 {
+		return nil
+	}
+	var thisRole string
+	for _, p := range plans {
+		if p.Index == planIndex {
+			thisRole = p.Role
+			break
+		}
+	}
+
+	var downstream []string
+	for _, p := range plans {
+		if p.Index == planIndex {
+			continue
+		}
+		for _, dep := range p.DependsOn {
+			if dep == planIndex {
+				label := p.RoleLabel
+				if label == "" {
+					label = p.Role
+				}
+				downstream = append(downstream, label)
+				break
+			}
+		}
+	}
+
+	// Derive a kebab-case artifact name from the role. Models will see this
+	// in the prompt as a concrete name to call produce_artifact with —
+	// removes one decision point that often blocks tool use.
+	suggested := strings.ToLower(strings.ReplaceAll(thisRole, " ", "-")) + "-output"
+
+	return &MultiDaemonContext{
+		PlanIndex:             planIndex,
+		TotalDaemons:          len(plans),
+		HasDownstream:         len(downstream) > 0,
+		DownstreamRoles:       downstream,
+		SuggestedArtifactName: suggested,
+	}
+}
+
 // launchDaemon starts a daemon runner in a goroutine.
 // wg is optional — when non-nil, wg.Done() is called when the goroutine exits.
+// plans is the full plan slice; we compute the MultiDaemonContext from it
+// so the daemon's system prompt knows its position + downstream consumers
+// + whether to produce artifacts.
 func (s *CortexService) launchDaemon(
 	ctx context.Context,
 	userID string,
@@ -1034,6 +1086,7 @@ func (s *CortexService) launchDaemon(
 	projectInstruction string,
 	skillIDs []primitive.ObjectID,
 	wg *sync.WaitGroup,
+	plans []DaemonPlan,
 ) {
 	runner := NewDaemonRunner(DaemonRunnerConfig{
 		Daemon:          daemon,
@@ -1054,6 +1107,7 @@ func (s *CortexService) launchDaemon(
 		OriginalMessage:    originalMessage,
 		ProjectInstruction: projectInstruction,
 		SkillIDs:           skillIDs,
+		MultiDaemonCtx:     buildMultiDaemonContext(planIndex, plans),
 	})
 
 	s.daemonPool.RegisterRunner(daemon.ID.Hex(), runner.Cancel)
@@ -1163,10 +1217,21 @@ func (s *CortexService) forwardSingleUpdate(userID string, update DaemonUpdate) 
 	s.publish(userID, eventType, update)
 }
 
-// synthesizeResults aggregates completed daemon results into a final response
+// synthesizeResults aggregates completed daemon results into a final response.
+//
+// Reads artifacts from the orchestration's session and folds the FULL bodies
+// into the synthesis prompt (under a per-artifact budget so the prompt stays
+// under context window). Without this, the synthesis LLM only sees the
+// 4000-char text summaries each daemon dumped, which is way too thin for
+// research-heavy outputs the user expects to see in the final result.
+//
+// File-producing artifacts (e.g. html_to_pdf output) are surfaced separately
+// with a clear "Files Produced" section so the synthesis can reference them
+// and the user can find their downloadable outputs.
 func (s *CortexService) synthesizeResults(
 	ctx context.Context,
 	userID string,
+	sessionID primitive.ObjectID,
 	parentTaskID primitive.ObjectID,
 	modelID string,
 	completed map[int]*DaemonResult,
@@ -1186,27 +1251,108 @@ func (s *CortexService) synthesizeResults(
 		return
 	}
 
+	// Pull all artifacts the daemons produced. Best-effort — if mongo is
+	// slow or the store is down we just fall back to summaries-only.
+	var artifactSummaries []NexusArtifactSummary
+	if s.artifactStore != nil && !sessionID.IsZero() {
+		listCtx, listCancel := context.WithTimeout(ctx, 5*time.Second)
+		if items, err := s.artifactStore.List(listCtx, sessionID); err == nil {
+			artifactSummaries = items
+		}
+		listCancel()
+	}
+
+	// Per-artifact budget. With 5 artifacts at 4 KB each we add ~20 KB
+	// (~5K tokens) which is fine on a 128K-context model. If a single
+	// artifact is bigger we head+tail truncate it via capDependencyResult.
+	const perArtifactBudget = 4000
+	const maxArtifactsInPrompt = 6
+
 	var sb strings.Builder
-	sb.WriteString("The following daemons have completed their work. Synthesize a cohesive final response:\n\n")
+	sb.WriteString("The following daemons have completed their work. Produce a cohesive final response for the user — weave the data together, don't just paraphrase the summaries.\n\n")
+	sb.WriteString("## Daemon Summaries\n\n")
 	for _, plan := range plans {
 		if result, ok := completed[plan.Index]; ok {
 			sb.WriteString(fmt.Sprintf("### %s (%s)\n%s\n\n", plan.RoleLabel, plan.Role, result.Summary))
 		}
 	}
-	sb.WriteString("Provide a unified, well-structured summary combining all daemon results.")
+
+	// Fold artifacts in. We read the FULL content (not just summary)
+	// because the summaries are already in the daemon summaries above —
+	// the value here is the structured body the synthesis would otherwise
+	// miss entirely.
+	if len(artifactSummaries) > 0 {
+		// Most-recent first; keep at most maxArtifactsInPrompt.
+		take := len(artifactSummaries)
+		if take > maxArtifactsInPrompt {
+			take = maxArtifactsInPrompt
+		}
+		var filesProduced []string
+		var bodySection strings.Builder
+		bodyCount := 0
+		for i := 0; i < take; i++ {
+			meta := artifactSummaries[i]
+			// File-producing artifacts (url/file type) get listed separately so
+			// the user can download them. Don't dump file bytes into the prompt.
+			ctLower := strings.ToLower(meta.ContentType)
+			if strings.Contains(ctLower, "url") || strings.Contains(ctLower, "file") ||
+				strings.Contains(ctLower, "pdf") || strings.Contains(ctLower, "binary") {
+				filesProduced = append(filesProduced, fmt.Sprintf("- **%s** (%s, %d bytes): %s",
+					meta.Name, meta.ContentType, meta.SizeBytes, meta.Summary))
+				continue
+			}
+			// Pull full body for text/markdown/json/csv artifacts.
+			readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
+			doc, err := s.artifactStore.Read(readCtx, sessionID, meta.Name)
+			readCancel()
+			if err != nil || doc == nil {
+				continue
+			}
+			body := capDependencyResult(doc.Content, perArtifactBudget)
+			bodySection.WriteString(fmt.Sprintf("### %s (%s)\n", meta.Name, meta.ContentType))
+			if meta.Summary != "" {
+				bodySection.WriteString(fmt.Sprintf("_%s_\n\n", meta.Summary))
+			}
+			bodySection.WriteString(body)
+			bodySection.WriteString("\n\n")
+			bodyCount++
+		}
+		if bodyCount > 0 {
+			sb.WriteString("## Structured Artifacts (full bodies)\n\n")
+			sb.WriteString(bodySection.String())
+		}
+		if len(filesProduced) > 0 {
+			sb.WriteString("## Files Produced (for the user to download)\n\n")
+			sb.WriteString(strings.Join(filesProduced, "\n"))
+			sb.WriteString("\n\nReference these explicitly in your response so the user knows what files are available.\n\n")
+		}
+	}
+
+	sb.WriteString("\n## Your Job\n\nProduce a unified, well-structured response that:\n")
+	sb.WriteString("- Integrates the structured artifact data above (don't just paraphrase summaries)\n")
+	sb.WriteString("- Cites or references specific findings the user can verify\n")
+	sb.WriteString("- If files were produced, mentions them so the user knows to look for the download\n")
+	sb.WriteString("- Is shaped like the user's original request (a report → reads like a report; a summary → reads like a summary)\n")
 
 	messages := []map[string]interface{}{
-		{"role": "system", "content": "You are Cortex, an AI orchestrator. Synthesize the results from multiple specialized daemons into a cohesive response."},
+		{"role": "system", "content": "You are Cortex, an AI orchestrator. Synthesize results from multiple specialized daemons into a cohesive response. Be rich — fold in artifact data, not just summaries."},
 		{"role": "user", "content": sb.String()},
 	}
 
 	synthesis, err := s.chatService.ChatCompletionSync(ctx, userID, modelID, messages, nil)
 	if err != nil {
+		// Fallback: include daemon summaries + a hint about artifacts so the
+		// user at least knows where the structured data lives. Better than
+		// pure concatenation which made it look like everything was lost.
 		var fallback strings.Builder
+		fallback.WriteString("⚠️ Synthesis LLM call failed — showing raw daemon outputs:\n\n")
 		for _, plan := range plans {
 			if result, ok := completed[plan.Index]; ok {
 				fallback.WriteString(fmt.Sprintf("**%s:** %s\n\n", plan.RoleLabel, result.Summary))
 			}
+		}
+		if len(artifactSummaries) > 0 {
+			fallback.WriteString(fmt.Sprintf("\n%d structured artifact(s) were produced — open the task panel to inspect them.\n", len(artifactSummaries)))
 		}
 		synthesis = fallback.String()
 	}

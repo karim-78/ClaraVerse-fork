@@ -876,15 +876,21 @@ func main() {
 		log.Println("✅ Routine handler initialized (Dobby's Claw)")
 	}
 
-	// Initialize Nexus multi-agent system (requires MongoDB)
+	// Initialize Nexus multi-agent system (requires MongoDB).
+	// cortexService, nexusTaskStore, nexusSessionStore are hoisted to the
+	// outer scope so the headless run-handler route registration (much
+	// later in the file) can reuse them without rebuilding.
 	var nexusWSHandler *handlers.NexusWebSocketHandler
 	var nexusHandler *handlers.NexusHandler
+	var cortexService *services.CortexService
+	var nexusTaskStore *services.NexusTaskStore
+	var nexusSessionStore *services.NexusSessionStore
 	if mongoDB != nil {
-		nexusTaskStore := services.NewNexusTaskStore(mongoDB)
+		nexusTaskStore = services.NewNexusTaskStore(mongoDB)
 		if routineHandler != nil {
 			routineHandler.SetTaskStore(nexusTaskStore)
 		}
-		nexusSessionStore := services.NewNexusSessionStore(mongoDB)
+		nexusSessionStore = services.NewNexusSessionStore(mongoDB)
 		personaService := services.NewPersonaService(mongoDB)
 		engramService := services.NewEngramService(mongoDB)
 		daemonPool := services.NewDaemonPool(mongoDB)
@@ -894,7 +900,7 @@ func main() {
 
 		nexusEventBus := services.NewNexusEventBus()
 
-		cortexService := services.NewCortexService(
+		cortexService = services.NewCortexService(
 			chatService,
 			providerService,
 			tools.GetRegistry(),
@@ -1447,6 +1453,18 @@ func main() {
 			nexus.Get("/saves/:id", nexusHandler.GetSave)
 			nexus.Put("/saves/:id", nexusHandler.UpdateSave)
 			nexus.Delete("/saves/:id", nexusHandler.DeleteSave)
+
+			// Headless run endpoints — same orchestration path as the
+			// WebSocket but driven by REST. Useful for scripted tests,
+			// debugging, and any third-party integration that doesn't
+			// want a WS connection. See nexus_run_handler.go for docs.
+			if cortexService != nil {
+				runHandler := handlers.NewNexusRunHandler(cortexService, nexusTaskStore, nexusSessionStore)
+				nexus.Post("/run", runHandler.Run)         // fire and return task_id; poll for status
+				nexus.Post("/run/sync", runHandler.RunSync) // fire and block until completion (test path)
+				log.Println("✅ Nexus run endpoints registered (POST /run, /run/sync)")
+			}
+
 			log.Println("✅ Nexus routes registered")
 		}
 

@@ -25,6 +25,33 @@ import { nexusService } from '@/services/nexusService';
 import type { NexusTaskStatus } from '@/types/nexus';
 import styles from './Nexus.module.css';
 
+// extractFileLinks scans a markdown summary for backend file URLs the daemons
+// produced (html_to_pdf, create_document, etc.). The daemons emit links like
+// `/api/files/<id>` or `(/files/<id>)` in their summaries; we lift them out
+// and render them as prominent download buttons so the user doesn't have to
+// hunt through markdown to find their PDF.
+//
+// Deduplicates by URL. Label is derived from the closest preceding text or
+// the file extension; never empty.
+function extractFileLinks(summary: string): Array<{ url: string; label: string }> {
+  if (!summary) return [];
+  // Match /api/files/<id> or /files/<id> where id is hex/uuid-ish.
+  const re = /\/(api\/)?files\/([A-Za-z0-9_\-.]+)/g;
+  const seen = new Set<string>();
+  const out: Array<{ url: string; label: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(summary)) !== null) {
+    const url = m[0];
+    if (seen.has(url)) continue;
+    seen.add(url);
+    // Best-effort filename: trailing segment after the last slash.
+    const tail = m[2];
+    const ext = tail.includes('.') ? tail.slice(tail.lastIndexOf('.') + 1).toUpperCase() : 'file';
+    out.push({ url, label: ext });
+  }
+  return out;
+}
+
 function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -324,6 +351,34 @@ export const TaskDetailPanel = memo(function TaskDetailPanel({
                   )}
                 </button>
               </div>
+              {/* File downloads — scrape the result for /api/files/<id> links the
+                  daemons produced (html_to_pdf, create_document, etc.). Rendered
+                  before the markdown so they're impossible to miss. */}
+              {extractFileLinks(task.result.summary).map(link => (
+                <a
+                  key={link.url}
+                  href={link.url}
+                  download
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={styles.detailDownloadBtn ?? ''}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 14px',
+                    margin: '8px 8px 8px 0',
+                    background: '#2d8a4f',
+                    color: 'white',
+                    borderRadius: 6,
+                    textDecoration: 'none',
+                    fontWeight: 500,
+                    fontSize: 13,
+                  }}
+                >
+                  ⬇ Download {link.label}
+                </a>
+              ))}
               <MarkdownRenderer content={task.result.summary} />
             </div>
           )}
