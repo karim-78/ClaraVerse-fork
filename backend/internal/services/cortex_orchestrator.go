@@ -1251,12 +1251,24 @@ func (s *CortexService) synthesizeResults(
 		return
 	}
 
-	// Pull all artifacts the daemons produced. Best-effort — if mongo is
-	// slow or the store is down we just fall back to summaries-only.
+	// Pull artifacts the daemons in THIS orchestration produced. Filter
+	// by parent task creation time so stale artifacts from prior tasks
+	// in the same session don't contaminate the synthesis. Without this
+	// filter every new task's synthesis pulled the entire session's
+	// artifact history — producing reports about whatever the previous
+	// task was, not the current one. Verified live 2026-05-31.
 	var artifactSummaries []NexusArtifactSummary
 	if s.artifactStore != nil && !sessionID.IsZero() {
 		listCtx, listCancel := context.WithTimeout(ctx, 5*time.Second)
-		if items, err := s.artifactStore.List(listCtx, sessionID); err == nil {
+		// Use the parent task's created_at as the lower bound. Best-effort:
+		// if the task lookup fails, fall back to a 10-min sliding window
+		// rather than pulling everything (no filter would re-introduce the
+		// contamination bug).
+		since := time.Now().UTC().Add(-10 * time.Minute)
+		if parent, err := s.taskStore.GetByID(listCtx, userID, parentTaskID); err == nil && parent != nil {
+			since = parent.CreatedAt
+		}
+		if items, err := s.artifactStore.ListSince(listCtx, sessionID, since); err == nil {
 			artifactSummaries = items
 		}
 		listCancel()
@@ -1328,14 +1340,16 @@ func (s *CortexService) synthesizeResults(
 		}
 	}
 
-	sb.WriteString("\n## Your Job\n\nProduce a unified, well-structured response that:\n")
-	sb.WriteString("- Integrates the structured artifact data above (don't just paraphrase summaries)\n")
-	sb.WriteString("- Cites or references specific findings the user can verify\n")
-	sb.WriteString("- If files were produced, mentions them so the user knows to look for the download\n")
-	sb.WriteString("- Is shaped like the user's original request (a report → reads like a report; a summary → reads like a summary)\n")
+	sb.WriteString("\n## Your Job\n\nProduce a unified, well-structured response shaped like the user's original request. Specifically:\n")
+	sb.WriteString("- Use the daemon summaries and any artifact bodies above as your source material.\n")
+	sb.WriteString("- If artifact bodies are present, integrate the actual content — don't just paraphrase the summary.\n")
+	sb.WriteString("- If artifacts are absent, work directly from the daemon summaries — they're informative even if less complete.\n")
+	sb.WriteString("- NEVER refuse to answer or stall waiting for more data. You have what the daemons gave you — produce the best response possible from it.\n")
+	sb.WriteString("- If files were produced, mention them so the user knows where to find the download.\n")
+	sb.WriteString("- Make it read like a report / summary / brief / answer — whatever the original ask was.\n")
 
 	messages := []map[string]interface{}{
-		{"role": "system", "content": "You are Cortex, an AI orchestrator. Synthesize results from multiple specialized daemons into a cohesive response. Be rich — fold in artifact data, not just summaries."},
+		{"role": "system", "content": "You are Cortex, an AI orchestrator. Synthesize daemon results into a useful response. Produce the best answer you can with the material on hand — never stall or refuse."},
 		{"role": "user", "content": sb.String()},
 	}
 

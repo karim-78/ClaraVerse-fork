@@ -180,6 +180,35 @@ type NexusArtifactSummary struct {
 	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
 }
 
+// ListSince returns artifacts in a session that were produced AT OR AFTER
+// `since`. Used by orchestration synthesis to ignore artifacts produced by
+// PRIOR tasks in the same session — without this filter, every new
+// orchestration's synthesis would pull in every artifact the user has
+// ever produced, contaminating the result with stale content. Same slim-
+// projection shape as List.
+func (s *NexusArtifactStore) ListSince(ctx context.Context, sessionID primitive.ObjectID, since time.Time) ([]NexusArtifactSummary, error) {
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetProjection(bson.M{"name": 1, "content_type": 1, "summary": 1, "size_bytes": 1, "created_at": 1})
+	cursor, err := s.coll.Find(ctx, bson.M{
+		"session_id": sessionID,
+		"created_at": bson.M{"$gte": since},
+	}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	out := make([]NexusArtifactSummary, 0, 16)
+	for cursor.Next(ctx) {
+		var s NexusArtifactSummary
+		if err := cursor.Decode(&s); err != nil {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 func (s *NexusArtifactStore) List(ctx context.Context, sessionID primitive.ObjectID) ([]NexusArtifactSummary, error) {
 	opts := options.Find().
 		SetSort(bson.D{{Key: "created_at", Value: -1}}).
