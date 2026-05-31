@@ -338,11 +338,13 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 	// 6. Daemon execution loop
 	maxIter := r.instance.MaxIterations
 	if maxIter <= 0 {
-		// Default bumped to 40 (was 25) because we now force serial tool
-		// calls — every "go search and synthesize" task burns one
-		// iteration per tool call. 40 gives 2-3 search batches + a
-		// produce_artifact + a synthesis turn, with headroom.
-		maxIter = 40
+		// Default 100 (was 25, then 40). Serial tool calls + deep
+		// research workflows need real headroom — 100 lets a daemon do
+		// ~5-8 search-and-refine rounds plus tool calls for
+		// produce_artifact / file generation / synthesis. The
+		// phase-summary recycler (added separately) keeps context flat
+		// across this many iterations so we don't blow the window.
+		maxIter = 100
 	}
 
 	for i := 0; i < maxIter; i++ {
@@ -372,6 +374,22 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 					"If this is a multi-daemon task, call produce_artifact with what you have, then write a summary. " +
 					"A partial answer is far better than running out of budget with nothing to show.",
 			})
+		}
+
+		// Phase-summary recycling. Every phaseSize iterations, ask the
+		// model to summarise progress and reset history to
+		// [system, original user msg, phase summary]. Without this,
+		// long-running daemons (100+ iterations) accumulate so much
+		// tool-call history that even aggressive shrinking can't keep
+		// the context flat. The summary preserves DECISIONS and KEY
+		// FINDINGS; the model continues from a clean slate.
+		const phaseSize = 25
+		if i > 0 && i%phaseSize == 0 && i < maxIter-5 {
+			if compacted, ok := r.compactToPhaseSummary(ctx, config, messages, i); ok {
+				log.Printf("[DAEMON %s] Phase boundary at iter %d — compacted %d msgs → %d",
+					r.instance.RoleLabel, i, len(messages), len(compacted))
+				messages = compacted
+			}
 		}
 
 		// Proactive context trimming before LLM call
@@ -549,6 +567,78 @@ func (r *DaemonRunner) adaptiveResultCap() int {
 	default:
 		return 1500
 	}
+}
+
+// compactToPhaseSummary asks the model to summarise the work done so far
+// then returns a fresh, short message slice the daemon can continue from.
+// Output shape:
+//
+//   [system_prompt, original_user_message, "## Progress so far\n<summary>"]
+//
+// The phase summary preserves what the daemon has DECIDED, what it has
+// LEARNED, what it has PRODUCED (artifact names), and what's LEFT. The
+// model picks up where it left off but without dragging 25 iterations of
+// tool-call history forward.
+//
+// Returns (newMessages, true) on success, (nil, false) if the summary
+// call fails — in that case the caller keeps the existing messages and
+// lets the regular trimmer handle the bloat.
+func (r *DaemonRunner) compactToPhaseSummary(
+	ctx context.Context,
+	config *models.Config,
+	messages []map[string]interface{},
+	iteration int,
+) ([]map[string]interface{}, bool) {
+	if len(messages) < 4 {
+		return nil, false // nothing meaningful to compact yet
+	}
+
+	// Build the summarisation prompt from a copy of messages plus a final
+	// user turn asking for the summary. Don't mutate the live history.
+	probe := make([]map[string]interface{}, len(messages))
+	copy(probe, messages)
+	probe = append(probe, map[string]interface{}{
+		"role": "user",
+		"content": fmt.Sprintf(
+			"PHASE BOUNDARY (iteration %d). Stop and write a structured progress note covering:\n\n"+
+				"1. What I've already DECIDED or established (key facts, choices).\n"+
+				"2. What I've LEARNED from tool calls (the load-bearing findings, not raw output).\n"+
+				"3. What artifacts I've PRODUCED (names + 1-line each).\n"+
+				"4. What's STILL LEFT to do toward the original task.\n\n"+
+				"Write under 300 words. No tool calls — just the note. After this you'll continue with a fresh context, "+
+				"so this summary needs to carry forward everything important.", iteration),
+	})
+
+	// Make the call without tools — pure text response.
+	summary, _, _, err := r.callLLM(ctx, config, probe, nil)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		log.Printf("[DAEMON %s] phase compact failed (iter %d): %v",
+			r.instance.RoleLabel, iteration, err)
+		return nil, false
+	}
+
+	// Rebuild: system + original user msg + phase summary as assistant
+	// note + small "continue" nudge.
+	var system map[string]interface{}
+	var userMsg map[string]interface{}
+	for _, m := range messages {
+		if role, _ := m["role"].(string); role == "system" && system == nil {
+			system = m
+		} else if role, _ := m["role"].(string); role == "user" && userMsg == nil {
+			userMsg = m
+			break
+		}
+	}
+	if system == nil || userMsg == nil {
+		return nil, false
+	}
+
+	return []map[string]interface{}{
+		system,
+		userMsg,
+		{"role": "assistant", "content": "## Progress so far (auto-summary)\n\n" + summary},
+		{"role": "user", "content": "Continue from there. Pick up where the summary leaves off — don't restart or re-search what's already covered."},
+	}, true
 }
 
 // filterValidToolCalls drops any tool_call whose .function.arguments isn't
@@ -1347,7 +1437,44 @@ func (r *DaemonRunner) complete(ctx context.Context, response string) {
 	log.Printf("[DAEMON %s] Completed successfully", r.instance.RoleLabel)
 }
 
-// handleError handles LLM errors with retry logic
+// isTransientLLMError detects errors worth waiting out vs ones that won't
+// improve on retry. Rate-limits, 5xx, network blips, context-canceled all
+// count as transient — bad request / 4xx (other than 429) do not.
+//
+// We pattern-match against the error string because err is usually wrapped
+// by fmt.Errorf and there's no typed sentinel coming back from
+// http.Client. Cheap, robust enough — if a new transient pattern shows up
+// we just add it here.
+func isTransientLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "status 429"),       // rate limit
+		strings.Contains(s, "status 500"),
+		strings.Contains(s, "status 502"),
+		strings.Contains(s, "status 503"),
+		strings.Contains(s, "status 504"),
+		strings.Contains(s, "context deadline exceeded"),
+		strings.Contains(s, "connection reset"),
+		strings.Contains(s, "EOF"),
+		strings.Contains(s, "i/o timeout"),
+		strings.Contains(s, "no such host"),       // DNS blip
+		strings.Contains(s, "connection refused"): // brief outage
+		return true
+	}
+	return false
+}
+
+// handleError handles LLM errors with retry logic.
+//
+// Two retry budgets:
+//   - Non-transient (4xx etc.): respects MaxRetries (default 3) — these
+//     usually won't fix themselves no matter how long we wait.
+//   - Transient (429/5xx/network/timeout): up to 6 attempts with
+//     exponential backoff up to ~30s. A 20-minute orchestration shouldn't
+//     die because the provider hiccupped for 5 seconds.
 func (r *DaemonRunner) handleError(ctx context.Context, err error) bool {
 	r.mu.Lock()
 	r.instance.RetryCount++
@@ -1358,18 +1485,30 @@ func (r *DaemonRunner) handleError(ctx context.Context, err error) bool {
 	if maxRetries <= 0 {
 		maxRetries = 3
 	}
+	// Allow more attempts for transient errors — provider blips are
+	// common and a single 30-second wait often clears them.
+	maxForThis := maxRetries
+	if isTransientLLMError(err) {
+		maxForThis = 6
+	}
 
-	if retryCount <= maxRetries {
-		log.Printf("[DAEMON %s] Error (attempt %d/%d): %v", r.instance.RoleLabel, retryCount, maxRetries, err)
+	if retryCount <= maxForThis {
+		log.Printf("[DAEMON %s] Error (attempt %d/%d, transient=%v): %v",
+			r.instance.RoleLabel, retryCount, maxForThis, isTransientLLMError(err), err)
 		r.sendUpdate(DaemonUpdate{
 			Type:          "status",
 			Status:        "retrying",
-			CurrentAction: fmt.Sprintf("Retrying after error (attempt %d/%d)", retryCount, maxRetries),
+			CurrentAction: fmt.Sprintf("Retrying after error (attempt %d/%d)", retryCount, maxForThis),
 			Error:         err.Error(),
 		})
 
-		// Exponential backoff
-		backoff := time.Duration(retryCount*retryCount) * time.Second
+		// Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped).
+		// For non-transient errors the maxRetries=3 cap means we never go
+		// past 4s anyway, so the higher ceiling is harmless.
+		backoff := time.Duration(1<<uint(retryCount-1)) * time.Second
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
 		select {
 		case <-time.After(backoff):
 			return true

@@ -1033,7 +1033,8 @@ func main() {
 					go func() {
 						// Panic recovery lives inside ResumeOrchestration —
 						// fiber's recover middleware shadows the builtin here.
-						resumeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+						// 30 min matches HandleUserMessage's exec ceiling.
+						resumeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 						defer cancel()
 						cortexService.ResumeOrchestration(resumeCtx, st)
 					}()

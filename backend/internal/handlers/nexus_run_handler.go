@@ -109,9 +109,10 @@ func (h *NexusRunHandler) Run(c *fiber.Ctx) error {
 	firedAt := time.Now().UTC()
 
 	// Dispatch on a fresh background context — survives both the HTTP
-	// request lifecycle and any client disconnect.
+	// request lifecycle and any client disconnect. 30 min ceiling matches
+	// HandleUserMessage's internal cap.
 	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 		h.cortex.HandleUserMessage(
 			bgCtx,
@@ -168,8 +169,10 @@ func (h *NexusRunHandler) RunSync(c *fiber.Ctx) error {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if timeout > 10*time.Minute {
-		timeout = 10 * time.Minute
+	// Match the 30-min HandleUserMessage ceiling. Long deep-research
+	// tasks need the headroom; the inner exec context still caps them.
+	if timeout > 30*time.Minute {
+		timeout = 30 * time.Minute
 	}
 
 	firedAt := time.Now().UTC()

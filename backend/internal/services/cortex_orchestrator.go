@@ -67,8 +67,12 @@ func (s *CortexService) HandleUserMessage(
 	saveIDs []string,    // saved items to attach as reference context
 ) {
 	isRoutine := routineID != primitive.NilObjectID
-	// Add a ceiling timeout so we never run forever
-	execCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// Hard ceiling so we never run forever. 30 minutes — enough headroom
+	// for deep multi-daemon research that does dozens of tool calls per
+	// daemon, while still bounded enough that a genuine stuck loop
+	// surfaces as failure within a reasonable user-attention window.
+	// Was 10 min, which cut off legitimate research workflows.
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
 	// 1. Ensure session exists

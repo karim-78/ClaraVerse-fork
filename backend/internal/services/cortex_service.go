@@ -65,8 +65,13 @@ type CortexService struct {
 	userSemaphores sync.Map // userID → chan struct{} (buffered, cap 5)
 }
 
-// maxDaemonsPerUser is the maximum concurrent daemons a single user can have
-const maxDaemonsPerUser = 5
+// maxDaemonsPerUser is the maximum concurrent daemons a single user can have.
+// Bumped to 10 (was 5) so parallel multi-daemon orchestrations don't queue
+// up Writer/Synthesizer steps from sibling tasks. The orchestrator's
+// no-drop fix means cap-exhausted daemons wait instead of disappearing,
+// but waiting still feels slow — 10 gives ~2 simultaneous research+write
+// workflows of breathing room before anything queues.
+const maxDaemonsPerUser = 10
 
 // NewCortexService creates a new Cortex orchestrator
 func NewCortexService(
