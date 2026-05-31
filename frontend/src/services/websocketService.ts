@@ -181,7 +181,14 @@ class WebSocketService {
     attachments?: Attachment[],
     customConfig?: { base_url: string; api_key: string; model: string },
     disableTools?: boolean,
-    selectedTools?: string[]
+    selectedTools?: string[],
+    /**
+     * Project IDs whose RAG knowledge bases should be available to
+     * the LLM via search_knowledge for this turn. Empty/undefined =
+     * no knowledge tool surfaced. The backend builds the tool
+     * factory bound to (user, project_ids) at request time.
+     */
+    knowledgeProjectIds?: string[]
   ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket not connected');
@@ -216,6 +223,10 @@ class WebSocketService {
 
     if (selectedTools && selectedTools.length > 0) {
       message.selected_tools = selectedTools;
+    }
+
+    if (knowledgeProjectIds && knowledgeProjectIds.length > 0) {
+      message.knowledge_project_ids = knowledgeProjectIds;
     }
 
     console.log('Sending message with history:', {

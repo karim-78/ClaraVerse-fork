@@ -284,6 +284,15 @@ func (h *WebSocketHandler) handleChatMessage(userConn *models.UserConnection, cl
 		log.Printf("🎯 Tool filter active for %s: %v", userConn.ConnID, userConn.SelectedTools)
 	}
 
+	// Per-turn RAG knowledge attachment. Reassigned EVERY turn (not
+	// merged with prior) so a follow-up with no chips selected gets
+	// no knowledge tool — matches the picker UX where chips are the
+	// source of truth, not a persistent connection mode.
+	userConn.KnowledgeProjectIDs = clientMsg.KnowledgeProjectIDs
+	if len(userConn.KnowledgeProjectIDs) > 0 {
+		log.Printf("📚 Knowledge attached for %s: %d project(s)", userConn.ConnID, len(userConn.KnowledgeProjectIDs))
+	}
+
 	// Propagate the per-turn reasoning_effort hint to the connection so
 	// chat_service can attach it to the LLM request body.
 	userConn.ReasoningEffort = clientMsg.ReasoningEffort

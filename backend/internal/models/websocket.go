@@ -19,6 +19,12 @@ type ClientMessage struct {
 	Attachments        []MessageAttachment      `json:"attachments,omitempty"`         // File attachments (images, documents)
 	DisableTools       bool                     `json:"disable_tools,omitempty"`       // Disable tools for this message (e.g., agent builder)
 	SelectedTools      []string                 `json:"selected_tools,omitempty"`      // If set, only use these tools (by name)
+	// KnowledgeProjectIDs: RAG attachment for this turn. When non-empty
+	// AND the user has indexed knowledge in any of these projects, the
+	// chat handler injects a per-turn search_knowledge tool scoped to
+	// these projects. Empty/absent = no knowledge tool, model talks
+	// from its own context only.
+	KnowledgeProjectIDs []string `json:"knowledge_project_ids,omitempty"`
 	// ReasoningEffort hints at how much reasoning the model should spend on
 	// this turn. Forwarded to providers that honor it (gpt-oss "low|medium|high",
 	// OpenAI o-series same set, Anthropic via thinking.budget_tokens — mapped
@@ -156,6 +162,17 @@ type UserConnection struct {
 	SystemInstructions string           // Optional: User-provided system prompt override
 	DisableTools       bool             // Disable tools for this connection (e.g., agent builder)
 	SelectedTools      []string         // If set, only use these tools (by name)
+	// KnowledgeProjectIDs: per-turn RAG attachment. When non-empty, chat
+	// service injects a search_knowledge tool bound to (UserID, these
+	// project IDs) for this turn. Reset on every chat_message so a
+	// follow-up with no attachments doesn't accidentally keep the tool.
+	KnowledgeProjectIDs []string
+	// InjectedTools holds per-turn, per-connection tools that aren't
+	// in the global/user registry — currently just search_knowledge
+	// when KnowledgeProjectIDs is set. Keyed by tool name so the
+	// dispatcher can find the right Execute function. Cleared on the
+	// next turn to keep cross-turn state clean.
+	InjectedTools map[string]InjectedTool
 	ReasoningEffort    string           // "low" | "medium" | "high" hint to the provider; empty = provider default
 	CreatedAt          time.Time
 	WriteChan          chan ServerMessage
@@ -163,6 +180,15 @@ type UserConnection struct {
 	Mutex              sync.Mutex
 	closed             bool           // Track if connection is closed
 	PromptWaiter       PromptWaiterFunc // Function to wait for interactive prompt responses
+}
+
+// InjectedTool is an opaque per-connection tool dispatcher. Avoids an
+// import cycle with internal/tools by carrying the Execute function
+// directly. Chat service assembles these when wiring per-turn tools
+// like search_knowledge and dispatches them before falling through
+// to the global registry.
+type InjectedTool struct {
+	Execute func(args map[string]interface{}) (string, error)
 }
 
 // SafeSend sends a message to WriteChan safely, returning false if the channel is closed

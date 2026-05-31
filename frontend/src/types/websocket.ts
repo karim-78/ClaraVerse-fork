@@ -104,6 +104,9 @@ export interface ChatMessagePayload {
   attachments?: Attachment[];
   disable_tools?: boolean; // Disable tools for this message (e.g., agent builder needs pure JSON)
   selected_tools?: string[]; // If set, only use these tools (by name) instead of all available
+  // RAG: project IDs whose knowledge bases should be searchable via
+  // search_knowledge for this turn. Empty/absent = no knowledge tool.
+  knowledge_project_ids?: string[];
 }
 
 export interface StopGenerationPayload {

@@ -92,6 +92,13 @@ export interface CommandCenterProps {
   onDisabledClick?: () => void;
   /** Whether file uploads are allowed (default: true) */
   allowFileUpload?: boolean;
+  /**
+   * Optional slot rendered above the textarea. Used by the chat
+   * surface to mount the KnowledgeProjectChips picker so RAG
+   * knowledge can be attached per-chat without coupling
+   * CommandCenter to the chat-specific store.
+   */
+  belowAttachmentsSlot?: React.ReactNode;
 }
 
 /** Ref handle for CommandCenter - allows parent to focus the input */
@@ -135,6 +142,7 @@ export const CommandCenter = forwardRef<CommandCenterHandle, CommandCenterProps>
       disabledMessage,
       onDisabledClick,
       allowFileUpload = true,
+      belowAttachmentsSlot,
     },
     ref
   ) => {
@@ -807,6 +815,12 @@ export const CommandCenter = forwardRef<CommandCenterHandle, CommandCenterProps>
                 onChange={handleFileSelect}
                 style={{ display: 'none' }}
               />
+
+              {/* Optional slot — chat surface mounts the knowledge
+                  project picker here. Rendered between attachments
+                  and the textarea so chips sit just above the input
+                  the user is currently typing into. */}
+              {belowAttachmentsSlot}
 
               {disabled ? (
                 <button

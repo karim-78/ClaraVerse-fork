@@ -1005,7 +1005,15 @@ func main() {
 		// Cortex picks up the searcher so daemons on project-scoped
 		// tasks get search_knowledge automatically when the project
 		// has indexed files.
-		cortexService.SetRAGSearcher(services.NewRAGSearcher(ragService))
+		ragSearcher := services.NewRAGSearcher(ragService)
+		cortexService.SetRAGSearcher(ragSearcher)
+		// Chat picks it up too — picker in the chat input attaches
+		// project IDs per-turn, chat service injects search_knowledge
+		// scoped to those projects.
+		if chatService != nil {
+			chatService.SetRAGSearcher(ragSearcher)
+			log.Println("✅ Chat search_knowledge wired (multi-project picker)")
+		}
 		// Workflow knowledge_search block: re-register with the live
 		// rag service so it actually does something. The placeholder
 		// nil-backed executor registered at startup returns a clear

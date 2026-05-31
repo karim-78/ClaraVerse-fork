@@ -21,6 +21,7 @@ import (
 	"claraverse/internal/tools"
 
 	cache "github.com/patrickmn/go-cache"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // truncateToolCallID ensures tool call IDs are max 40 chars (OpenAI API constraint)
@@ -52,6 +53,11 @@ type ChatService struct {
 	settingsService         *SettingsService          // Settings service for system-wide model assignments
 	healthService           *health.Service           // Health service for provider health tracking
 	skillService            *SkillService             // Skill service for auto-routing messages to skills
+	// ragSearcher is the optional RAG wiring. When set, chat turns
+	// that carry KnowledgeProjectIDs get a per-turn search_knowledge
+	// tool bound to (userID, project_ids). When nil, the picker is
+	// effectively a no-op and chat behaves as before.
+	ragSearcher RAGSearcher
 }
 
 // ContextSummary stores AI-generated summary of older messages
@@ -255,6 +261,14 @@ func (s *ChatService) SetUserService(userService *UserService) {
 }
 
 // SetSettingsService sets the settings service for system-wide model assignments
+// SetRAGSearcher wires the RAG layer so chat turns can attach
+// project knowledge bases via the chat picker. Optional — when nil,
+// the picker UI still works but the resulting knowledge_project_ids
+// are ignored at the LLM call.
+func (s *ChatService) SetRAGSearcher(r RAGSearcher) {
+	s.ragSearcher = r
+}
+
 func (s *ChatService) SetSettingsService(settingsService *SettingsService) {
 	s.settingsService = settingsService
 	log.Println("✅ [CHAT-SERVICE] Settings service set for system model assignment")
@@ -1899,6 +1913,44 @@ func (s *ChatService) StreamChatCompletion(userConn *models.UserConnection) erro
 			}
 		}
 
+		// ─── RAG: per-turn search_knowledge injection ─────────────
+		// When the user has attached projects via the chat picker AND
+		// at least one of those projects has indexed knowledge, append
+		// search_knowledge as a turn-scoped tool. The dispatch path
+		// below routes it via userConn.InjectedTools so it doesn't
+		// have to be in the global registry.
+		userConn.InjectedTools = nil // reset every turn
+		if s.ragSearcher != nil && len(userConn.KnowledgeProjectIDs) > 0 {
+			ctx := context.Background()
+			hasAny := false
+			for _, pidHex := range userConn.KnowledgeProjectIDs {
+				pid, err := primitive.ObjectIDFromHex(pidHex)
+				if err == nil && s.ragSearcher.HasKnowledge(ctx, userConn.UserID, pid) {
+					hasAny = true
+					break
+				}
+			}
+			if hasAny {
+				skTool := s.ragSearcher.BuildSearchTool(userConn.UserID, userConn.KnowledgeProjectIDs)
+				if skTool != nil {
+					tools = append(tools, map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        skTool.Name,
+							"description": skTool.Description,
+							"parameters":  skTool.Parameters,
+						},
+					})
+					if userConn.InjectedTools == nil {
+						userConn.InjectedTools = map[string]models.InjectedTool{}
+					}
+					userConn.InjectedTools[skTool.Name] = models.InjectedTool{Execute: skTool.Execute}
+					log.Printf("📚 [RAG] Injected search_knowledge for user %s (%d project(s))",
+						userConn.UserID, len(userConn.KnowledgeProjectIDs))
+				}
+			}
+		}
+
 		// Log MCP connection status
 		if s.mcpBridge != nil && s.mcpBridge.IsUserConnected(userConn.UserID) {
 			builtinCount := s.toolRegistry.Count()
@@ -2889,11 +2941,46 @@ parseSuccess:
 	}
 
 	// Execute tool (with injected user context)
+	hookStart := time.Now()
+
+	// Check connection-scoped injected tools FIRST. These are per-turn
+	// tools the chat service stitched together (e.g. search_knowledge
+	// bound to the user + selected projects). Dispatching them through
+	// the registry would either fail (not registered globally) or
+	// misroute (registered as user tool → MCP path).
+	if injected, ok := userConn.InjectedTools[toolName]; ok && injected.Execute != nil {
+		injResult, injErr := injected.Execute(args)
+		_ = tools.RunPostToolHooks(toolName, args, injResult, time.Since(hookStart), injErr)
+		if injErr != nil {
+			log.Printf("❌ [INJECTED-TOOL] %s failed: %v", toolName, injErr)
+			errorMsg := fmt.Sprintf("Error: %v", injErr)
+			userConn.SafeSend(models.ServerMessage{
+				Type:            "tool_result",
+				ToolName:        toolName,
+				ToolDisplayName: toolDisplayName,
+				ToolIcon:        toolIcon,
+				ToolDescription: toolDescription,
+				Status:          "failed",
+				Result:          errorMsg,
+			})
+			return errorMsg
+		}
+		userConn.SafeSend(models.ServerMessage{
+			Type:            "tool_result",
+			ToolName:        toolName,
+			ToolDisplayName: toolDisplayName,
+			ToolIcon:        toolIcon,
+			ToolDescription: toolDescription,
+			Status:          "success",
+			Result:          injResult,
+		})
+		return injResult
+	}
+
 	// Check if this is a built-in tool or MCP tool
 	tool, exists := s.toolRegistry.GetUserTool(userConn.UserID, toolName)
 	var result string
 	var err error
-	hookStart := time.Now()
 
 	if exists && tool.Source == tools.ToolSourceMCPLocal {
 		// MCP tool - route to local client

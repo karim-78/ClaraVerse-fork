@@ -46,6 +46,10 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useModelStore } from '@/store/useModelStore';
 import { useArtifactStore } from '@/store/useArtifactStore';
 import { useSettingsStore } from '@/store/useSettingsStore';
+import { useChatKnowledgeStore } from '@/store/useChatKnowledgeStore';
+import { KnowledgeProjectChips } from '@/components/chat/KnowledgeProjectChips';
+import { nexusService } from '@/services/nexusService';
+import type { NexusProject } from '@/types/nexus';
 import type { Message, ToolCall, RetryType } from '@/types/chat';
 import type { ActivePrompt } from '@/types/interactivePrompt';
 import { generateChatTitle, validateMessage } from '@/services/chatService';
@@ -292,6 +296,43 @@ export const Chat = () => {
 
   // Update document title based on current state
   useDocumentTitle(chat?.title ? chat.title : activeNav === 'artifacts' ? 'Artifacts' : 'Chat');
+
+  // ─── RAG: per-chat project knowledge attachments ──────────────────
+  //
+  // The user picks which project knowledge bases this chat should
+  // search via search_knowledge. Selection lives in
+  // useChatKnowledgeStore (persisted to localStorage by chat ID), so
+  // it survives reloads and tab switches.
+  //
+  // Projects are loaded once on mount from the Nexus REST API. We
+  // tolerate failure silently — RAG is optional, a missing project
+  // list just hides the picker rather than breaking chat.
+  const [knowledgeProjects, setKnowledgeProjects] = useState<NexusProject[]>([]);
+  const knowledgeStoreGet = useChatKnowledgeStore(s => s.get);
+  const knowledgeStoreSet = useChatKnowledgeStore(s => s.set);
+  const knowledgeStorePromote = useChatKnowledgeStore(s => s.promoteDraft);
+  const chatKnowledgeKey = chat?.id ?? null;
+  const knowledgeProjectIds = knowledgeStoreGet(chatKnowledgeKey);
+
+  useEffect(() => {
+    let cancelled = false;
+    nexusService
+      .listProjects()
+      .then(list => {
+        if (!cancelled) setKnowledgeProjects(list);
+      })
+      .catch(err => {
+        console.warn('[Chat] project list load failed (RAG picker hidden):', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleKnowledgeProjectsChange = useCallback(
+    (ids: string[]) => knowledgeStoreSet(chatKnowledgeKey, ids),
+    [chatKnowledgeKey, knowledgeStoreSet]
+  );
 
   // Handle URL-based navigation (like ChatGPT/Claude - fetch from cloud if not local)
   useEffect(() => {
@@ -1505,10 +1546,17 @@ export const Chat = () => {
       id: 'projects',
       label: 'Projects',
       icon: FolderKanban,
-      isActive: activeNav === 'projects',
-      onClick: () => setActiveNav('projects'),
-      disabled: true,
-      tooltip: 'Coming Soon',
+      // Active when at least one project is attached to the current
+      // chat — gives the user a visible cue that knowledge is in play.
+      isActive: knowledgeProjectIds.length > 0,
+      // Click navigates to Nexus → projects, where the user can
+      // create projects + upload knowledge files. The in-chat picker
+      // (chip row above the input) handles per-chat attachment.
+      onClick: () => navigate('/nexus'),
+      tooltip:
+        knowledgeProjectIds.length > 0
+          ? `${knowledgeProjectIds.length} project knowledge base${knowledgeProjectIds.length > 1 ? 's' : ''} attached`
+          : 'Manage your project knowledge bases',
     },
     {
       id: 'code',
@@ -1969,6 +2017,16 @@ export const Chat = () => {
         // Track streaming conversation for resume capability
         websocketService.setStreamingConversation(currentChatId);
 
+        // Promote the new-chat draft selection to this chat's ID so
+        // the picker selection the user made BEFORE the chat was
+        // created carries through. Idempotent and safe to call every
+        // turn (the store no-ops when there's no draft to promote).
+        knowledgeStorePromote(currentChatId);
+
+        // Re-read so we pick up the just-promoted IDs in case this
+        // was the chat's first send.
+        const knowledgeIdsForTurn = knowledgeStoreGet(currentChatId);
+
         websocketService.sendMessageWithHistory(
           messageToSend,
           modelIdToUse,
@@ -1976,7 +2034,10 @@ export const Chat = () => {
           historyMessages,
           effectiveSystemInstructions,
           attachments,
-          customConfig
+          customConfig,
+          undefined,
+          undefined,
+          knowledgeIdsForTurn
         );
 
         // Force scroll to bottom when user sends a message
@@ -2445,6 +2506,14 @@ export const Chat = () => {
                     mode="centered"
                     greeting={dynamicGreeting || 'Golden hour thinking'}
                     onSendMessage={handleSendMessage}
+                    belowAttachmentsSlot={
+                      <KnowledgeProjectChips
+                        projects={knowledgeProjects}
+                        selectedIds={knowledgeProjectIds}
+                        onChange={handleKnowledgeProjectsChange}
+                        disabled={isLoading}
+                      />
+                    }
                     activePrompt={activePrompt}
                     onPromptSubmit={answers => {
                       if (activePrompt) {
@@ -2660,6 +2729,14 @@ export const Chat = () => {
                       ref={commandCenterRef}
                       mode="bottom"
                       onSendMessage={handleSendMessage}
+                      belowAttachmentsSlot={
+                        <KnowledgeProjectChips
+                          projects={knowledgeProjects}
+                          selectedIds={knowledgeProjectIds}
+                          onChange={handleKnowledgeProjectsChange}
+                          disabled={isLoading}
+                        />
+                      }
                       placeholder="Type your message here..."
                       isLoading={isLoading}
                       onStopGeneration={handleStopGeneration}
