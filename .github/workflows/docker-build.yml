@@ -13,6 +13,10 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Second image — the embeddings sidecar that backs the RAG layer.
+  # Published under the same org so the CLI's auto-generated compose
+  # can pull it without users needing to build anything locally.
+  EMBEDDINGS_IMAGE_NAME: ${{ github.repository_owner }}/claraverse-embeddings
 
 jobs:
   build-and-push:
@@ -73,6 +77,74 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${FULL_IMAGE}:latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ─── Embeddings sidecar ─────────────────────────────────────────
+  # Separate job so it doesn't block (or get blocked by) the main
+  # app image build. The CLI's generated compose references this
+  # under ghcr.io/<owner>/claraverse-embeddings:latest — without
+  # this job that pull would 404.
+  #
+  # No FastEmbed model weights are baked into the image (~150 MB
+  # each, easier to swap at deploy time via env vars). The base
+  # image is just python + fastembed + uvicorn; model download
+  # happens on first /embed call into a docker volume.
+  build-embeddings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract embeddings metadata
+        id: meta_emb
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.EMBEDDINGS_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+
+      - name: Build and push embeddings sidecar
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend/embeddings-service
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta_emb.outputs.tags }}
+          labels: ${{ steps.meta_emb.outputs.labels }}
+          cache-from: type=gha,scope=embeddings
+          cache-to: type=gha,mode=max,scope=embeddings
+
+      - name: Summary
+        env:
+          META_TAGS: ${{ steps.meta_emb.outputs.tags }}
+          FULL_IMAGE: ${{ env.REGISTRY }}/${{ env.EMBEDDINGS_IMAGE_NAME }}
+        run: |
+          echo "## Embeddings Sidecar Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "$META_TAGS" | tr ',' '\n' | while read -r tag; do
+            echo "- \`$tag\`" >> $GITHUB_STEP_SUMMARY
+          done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Pull:**" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY

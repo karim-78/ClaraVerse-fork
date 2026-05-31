@@ -116,6 +116,11 @@ services:
       - REDIS_URL=redis://redis:6379
       - SEARXNG_URL=http://searxng:8080
       - SEARXNG_URLS=http://searxng:8080
+      # RAG (Knowledge bases). Both sidecars defined below — the
+      # backend tolerates either being unreachable and just hides
+      # the Knowledge tool until they come back.
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDINGS_SERVICE_URL=http://embeddings:8002
       - SERVE_FRONTEND=true
       - ALLOWED_ORIGINS=*
     depends_on:
@@ -125,6 +130,12 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      # Not depending on `embeddings` — its first boot downloads
+      # ~140 MB of ONNX models which can take 30-60s. Backend boots
+      # immediately; the Knowledge tab shows "embeddings warming up"
+      # only while a file is actually being processed.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
@@ -180,6 +191,46 @@ services:
       - INSTALL_DIR_PLACEHOLDER/searxng-settings.yml:/etc/searxng/settings.yml:ro
     restart: unless-stopped
 
+  # Qdrant — vector DB for the per-project Knowledge bases.
+  # One collection per project, hybrid dense+sparse vectors.
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: claraverse-qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__LOG_LEVEL=WARN
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # FastEmbed sidecar — dense (bge-small-en-v1.5, 384d) + sparse
+  # (BM25) + reranker (bge-reranker-base). First boot downloads
+  # ~140 MB of ONNX weights into a volume; subsequent restarts are
+  # fast. No model weights baked into the image so swapping models
+  # is just an env var change + restart.
+  embeddings:
+    image: ghcr.io/claraverse-space/claraverse-embeddings:latest
+    container_name: claraverse-embeddings
+    environment:
+      - EMBEDDINGS_DENSE_MODEL=BAAI/bge-small-en-v1.5
+      - EMBEDDINGS_SPARSE_MODEL=Qdrant/bm25
+      - EMBEDDINGS_RERANK_MODEL=BAAI/bge-reranker-base
+      - EMBEDDINGS_PRELOAD_RERANKER=false
+    volumes:
+      - embeddings-cache:/root/.cache/fastembed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health').read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
 volumes:
   app-data:
   app-uploads:
@@ -187,10 +238,18 @@ volumes:
   mongodb-data:
   redis-data:
   searxng-data:
+  qdrant-data:
+  embeddings-cache:
 COMPOSEEOF
 
     # Replace placeholder with actual install dir path
-    sed -i "s|INSTALL_DIR_PLACEHOLDER|${INSTALL_DIR}|g" "$COMPOSE_FILE"
+    # Portable in-place substitution. `sed -i` differs between GNU
+    # (no backup arg) and BSD (requires explicit '' for no backup) —
+    # the GNU form silently corrupts files on macOS. Doing it through
+    # a temp file works identically everywhere.
+    local _tmp
+    _tmp=$(mktemp)
+    sed "s|INSTALL_DIR_PLACEHOLDER|${INSTALL_DIR}|g" "$COMPOSE_FILE" > "$_tmp" && mv "$_tmp" "$COMPOSE_FILE"
 
     # Write SearXNG settings
     cat > "$INSTALL_DIR/searxng-settings.yml" << 'SEARXEOF'
@@ -331,6 +390,11 @@ cmd_init() {
         echo "    3. Add AI provider keys in Settings"
         echo "       Or just have Ollama running — it's auto-detected!"
         echo ""
+        echo -e "  ${BOLD}Knowledge bases (RAG):${NC}"
+        echo "    Upload PDFs/MD/TXT to any project's Knowledge tab."
+        echo "    The embeddings sidecar downloads ~140MB of models on"
+        echo "    first ingest (~60s); subsequent uploads are instant."
+        echo ""
         echo -e "  ${BOLD}Commands:${NC}"
         echo "    claraverse status   - Check status"
         echo "    claraverse logs     - View logs"
@@ -423,8 +487,8 @@ cmd_status() {
         return
     fi
 
-    # Show all container statuses
-    local services=("claraverse:App" "claraverse-mysql:MySQL" "claraverse-mongodb:MongoDB" "claraverse-redis:Redis" "claraverse-searxng:SearXNG")
+    # Show all container statuses (App + DBs + RAG sidecars)
+    local services=("claraverse:App" "claraverse-mysql:MySQL" "claraverse-mongodb:MongoDB" "claraverse-redis:Redis" "claraverse-searxng:SearXNG" "claraverse-qdrant:Qdrant" "claraverse-embeddings:Embed")
     for svc in "${services[@]}"; do
         local container="${svc%%:*}"
         local label="${svc##*:}"
