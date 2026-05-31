@@ -2213,6 +2213,35 @@ function BlockTypeSettings({ block, onUpdate }: BlockTypeSettingsProps) {
       );
     }
 
+    case 'knowledge_search': {
+      // Project IDs config can arrive as string[] (from default config),
+      // a single comma-separated string (legacy / hand-edited), or
+      // undefined (fresh block). Normalize to string[].
+      let projectIds: string[] = [];
+      const rawIds = (config as Record<string, unknown>).project_ids;
+      if (Array.isArray(rawIds)) {
+        projectIds = rawIds.filter((x): x is string => typeof x === 'string');
+      } else if (typeof rawIds === 'string') {
+        projectIds = rawIds
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+      }
+      const query = typeof config.query === 'string' ? config.query : '{{input.query}}';
+      const topK = typeof config.top_k === 'number' ? config.top_k : 5;
+      const rerank = config.rerank === undefined ? true : Boolean(config.rerank);
+
+      return (
+        <KnowledgeSearchSettings
+          projectIds={projectIds}
+          query={query}
+          topK={topK}
+          rerank={rerank}
+          onUpdate={onUpdate}
+        />
+      );
+    }
+
     default:
       return (
         <div className="pt-4">
@@ -5344,6 +5373,230 @@ function RetrySettings({ retryConfig, onChange }: RetrySettingsProps) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Knowledge Search Settings — project picker + query + retrieval params
+// ============================================================================
+//
+// Renders the config UI for the `knowledge_search` workflow block.
+// Loads the user's Nexus projects from REST, lets them check off one
+// or more, plus tune the query template + top_k + rerank toggle.
+//
+// Why this lives as its own component (not inline in the big
+// renderBlockSettings switch): the project list has its own async
+// fetch lifecycle and a non-trivial multi-select UI. Keeping it
+// scoped out makes the parent switch readable and avoids re-fetching
+// projects on every config keystroke.
+
+function KnowledgeSearchSettings({
+  projectIds,
+  query,
+  topK,
+  rerank,
+  onUpdate,
+}: {
+  projectIds: string[];
+  query: string;
+  topK: number;
+  rerank: boolean;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    // Inline import — keeping the top-of-file import surface tidy.
+    // The Nexus service is already bundled, no extra chunk.
+    import('@/services/nexusService')
+      .then(({ nexusService }) => nexusService.listProjects())
+      .then(list => {
+        if (cancelled) return;
+        setProjects(list.map(p => ({ id: p.id, name: p.name })));
+        setLoadError(null);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setLoadError(err instanceof Error ? err.message : 'failed to load projects');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleProject = useCallback(
+    (id: string) => {
+      const next = projectIds.includes(id)
+        ? projectIds.filter(p => p !== id)
+        : [...projectIds, id];
+      onUpdate({ project_ids: next });
+    },
+    [projectIds, onUpdate]
+  );
+
+  const selectedNames = projectIds
+    .map(id => projects.find(p => p.id === id)?.name ?? null)
+    .filter((n): n is string => Boolean(n));
+
+  return (
+    <div className="space-y-4 pt-4">
+      <h3 className="text-xs font-semibold text-[var(--color-text-primary)] uppercase tracking-wide">
+        Knowledge Search Settings
+      </h3>
+
+      <BlockHelpGuide title="Knowledge Search">
+        <p className="pt-2">
+          <strong>What it does:</strong> Retrieves the most relevant chunks from one or more
+          project knowledge bases (Qdrant-backed, dense + sparse hybrid with rerank). Feeds
+          downstream LLM blocks with citation-ready evidence.
+        </p>
+        <p>
+          <strong>Configuration:</strong>
+        </p>
+        <ul className="list-disc pl-4 space-y-1">
+          <li>
+            <strong>Projects</strong> — check one or more; queries fan across them and
+            results merge by reciprocal rank
+          </li>
+          <li>
+            <strong>Query</strong> — what to search for. Supports templates like{' '}
+            <code className="px-1 rounded bg-white/10">{'{{input.query}}'}</code>
+          </li>
+          <li>
+            <strong>Top K</strong> — how many chunks to return (5 is a good default)
+          </li>
+          <li>
+            <strong>Rerank</strong> — cross-encoder rerank on top-50 → top-K (worth it 95%
+            of the time)
+          </li>
+        </ul>
+        <p>
+          <strong>Output:</strong>{' '}
+          <code className="px-1 rounded bg-white/10">{'{ chunks, count, elapsed_ms }'}</code>
+        </p>
+      </BlockHelpGuide>
+
+      {/* ── Project picker ───────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+          Projects ({projectIds.length} selected)
+        </label>
+        {loadError ? (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300">
+            Couldn't load projects: {loadError}
+          </div>
+        ) : loading ? (
+          <div className="p-3 rounded-lg bg-white/5 text-xs text-[var(--color-text-tertiary)]">
+            Loading projects…
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="p-3 rounded-lg bg-white/5 text-xs text-[var(--color-text-tertiary)]">
+            No projects yet. Create one in Nexus and upload files to its Knowledge tab,
+            then come back here.
+          </div>
+        ) : (
+          <div className="max-h-56 overflow-y-auto rounded-lg border border-white/10 divide-y divide-white/5">
+            {projects.map(p => {
+              const checked = projectIds.includes(p.id);
+              return (
+                <label
+                  key={p.id}
+                  className={cn(
+                    'flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors',
+                    checked
+                      ? 'bg-[var(--color-accent-light)] text-[var(--color-accent)]'
+                      : 'hover:bg-white/5 text-[var(--color-text-primary)]'
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleProject(p.id)}
+                    className="w-4 h-4 rounded accent-[var(--color-accent)]"
+                  />
+                  <span className="text-sm flex-1 truncate" title={p.name}>
+                    {p.name}
+                  </span>
+                  <span className="text-[10px] font-mono text-[var(--color-text-tertiary)]">
+                    {p.id.slice(-6)}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {selectedNames.length > 0 && (
+          <p className="text-xs text-[var(--color-text-tertiary)]">
+            Searching: {selectedNames.join(', ')}
+          </p>
+        )}
+      </div>
+
+      {/* ── Query template ────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+          Query
+        </label>
+        <textarea
+          value={query}
+          onChange={e => onUpdate({ query: e.target.value })}
+          rows={2}
+          placeholder="{{input.query}}"
+          className="w-full px-3 py-2 rounded-lg bg-white/5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50 font-mono"
+        />
+        <p className="text-xs text-[var(--color-text-tertiary)]">
+          Templates resolve against upstream block outputs at runtime
+        </p>
+      </div>
+
+      {/* ── Top K + Rerank ────────────────────────────────────── */}
+      <div className="flex gap-3">
+        <div className="flex-1 space-y-1.5">
+          <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+            Top K
+          </label>
+          <input
+            type="number"
+            value={topK}
+            min={1}
+            max={30}
+            onChange={e => {
+              const n = parseInt(e.target.value, 10);
+              onUpdate({ top_k: Number.isFinite(n) && n > 0 ? Math.min(n, 30) : 5 });
+            }}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/50"
+          />
+          <p className="text-xs text-[var(--color-text-tertiary)]">Max 30 chunks returned</p>
+        </div>
+        <div className="flex-1 space-y-1.5">
+          <label className="text-xs font-medium text-[var(--color-text-secondary)]">
+            Rerank
+          </label>
+          <button
+            type="button"
+            onClick={() => onUpdate({ rerank: !rerank })}
+            className={cn(
+              'w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+              rerank
+                ? 'bg-[var(--color-accent-light)] text-[var(--color-accent)] border border-[var(--color-accent-border)]'
+                : 'bg-white/5 text-[var(--color-text-tertiary)] border border-white/10'
+            )}
+          >
+            {rerank ? 'On (cross-encoder)' : 'Off (vector only)'}
+          </button>
+          <p className="text-xs text-[var(--color-text-tertiary)]">
+            {rerank ? '+1-2s, much better' : 'Faster, lower quality'}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
