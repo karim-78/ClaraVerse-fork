@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { devtools } from 'zustand/middleware';
+import { devtools, persist, createJSONStorage } from 'zustand/middleware';
 import type {
   NexusSession,
   NexusTask,
@@ -152,9 +152,17 @@ const initialState = {
   _deletedTaskIds: new Set<string>(),
 };
 
+// Conversation/daemon snapshots are persisted to sessionStorage so the
+// live activity panel survives in-app navigation (Chat → Workflows → Nexus)
+// AND hard page reloads within the same tab. WebSocket reconnect still
+// fires a fresh session_state on top, but the cached snapshot fills the
+// gap so the UI never goes blank for the user. Scoped to sessionStorage
+// (not localStorage) so a different user opening a new tab gets a clean
+// slate — multi-user safety on shared devices.
 export const useNexusStore = create<NexusState>()(
   devtools(
-    set => ({
+    persist(
+      set => ({
       ...initialState,
 
       setConnected: connected => set({ connected }),
@@ -352,6 +360,24 @@ export const useNexusStore = create<NexusState>()(
           _deletedTaskIds: new Set<string>(),
         }),
     }),
+      {
+        name: 'nexus-live-panel',
+        storage: createJSONStorage(() => sessionStorage),
+        // Persist only what's needed to make the live panel "still there"
+        // when you come back. Skip: connection flags (rebuilt by WS),
+        // server-authoritative collections (refetched on mount), Sets
+        // (don't survive JSON), navigation state (URL is the source).
+        // The conversation+daemons pair is the panel; classification
+        // keeps the inline routing chip stable across navigation.
+        partialize: state => ({
+          conversation: state.conversation.slice(-200),
+          daemons: state.daemons,
+          classification: state.classification,
+          missedUpdates: state.missedUpdates,
+        }),
+        version: 1,
+      }
+    ),
     { name: 'nexus-store' }
   )
 );

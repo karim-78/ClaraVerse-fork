@@ -359,7 +359,13 @@ func (h *NexusWebSocketHandler) handleCancelDaemon(
 		return
 	}
 
-	_ = h.daemonPool.Cancel(msg.DaemonID)
+	if err := h.daemonPool.CancelForUser(ctx, userID, msg.DaemonID); err != nil {
+		writeChan <- NexusServerMessage{
+			Type: "error",
+			Data: map[string]string{"message": "daemon not found"},
+		}
+		return
+	}
 
 	daemonOID, err := primitive.ObjectIDFromHex(msg.DaemonID)
 	if err == nil {

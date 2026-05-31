@@ -81,6 +81,20 @@ type DaemonRunner struct {
 	// handoff — without it the model defaults to summary-only handoff and
 	// the structured store sits unused.
 	multiDaemonCtx *MultiDaemonContext
+
+	// toolsUsed tracks how many times each tool was successfully invoked
+	// during this daemon's run. Consumed by the quality gate to verify
+	// role-specific obligations before allowing completion (e.g. a
+	// "researcher" with zero search calls is almost certainly making
+	// things up). Keyed by tool name; counts include attempts that
+	// returned errors — the gate cares whether the model TRIED, not
+	// whether the tool succeeded.
+	toolsUsed map[string]int
+	// enforcementCount caps how many times the quality gate may reject a
+	// "complete" response. Two strikes is plenty: after two corrective
+	// reprompts, if the model still won't comply, we let it finish
+	// rather than burn the iteration budget.
+	enforcementCount int
 }
 
 // DaemonRunnerConfig holds configuration for creating a DaemonRunner
@@ -133,6 +147,7 @@ func NewDaemonRunner(cfg DaemonRunnerConfig) *DaemonRunner {
 		cancelCtx:          ctx,
 		cancelFunc:         cancel,
 		contextWindow:      contextWindow,
+		toolsUsed:          make(map[string]int),
 		chatService:     cfg.ChatService,
 		providerService: cfg.ProviderService,
 		toolRegistry:    cfg.ToolRegistry,
@@ -460,6 +475,12 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 					result = r.executeTool(ctx, toolName, toolArgs)
 				}
 
+				// Track tool usage for the quality gate (counts attempts,
+				// not successes — the gate cares about intent).
+				if toolName != "" {
+					r.toolsUsed[toolName]++
+				}
+
 				// Store in daemon working memory
 				r.addWorkingMemory(ctx, toolName, result)
 
@@ -501,6 +522,26 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 				done = r.isComplete(response)
 			}
 			if done {
+				// Quality gate: before we accept "I'm done", verify the
+				// daemon actually did its job. A researcher that never
+				// searched, or a multi-daemon worker that never handed
+				// off via produce_artifact, is delivering vibes — kick
+				// it back to keep working. Capped at 2 cycles so a
+				// stubborn model can't be pinned in an infinite loop.
+				if gateMsg, ok := r.qualityGateViolation(response); ok && r.enforcementCount < 2 {
+					r.enforcementCount++
+					log.Printf("[DAEMON %s] Quality gate %d/2: %s",
+						r.instance.RoleLabel, r.enforcementCount, gateMsg)
+					messages = append(messages, map[string]interface{}{
+						"role":    "assistant",
+						"content": response,
+					})
+					messages = append(messages, map[string]interface{}{
+						"role":    "user",
+						"content": gateMsg,
+					})
+					continue
+				}
 				log.Printf("[DAEMON %s] Completing (finish_reason=%q, response_len=%d)",
 					r.instance.RoleLabel, finishReason, len(response))
 				r.complete(ctx, response)
@@ -1407,6 +1448,62 @@ func (r *DaemonRunner) isComplete(response string) bool {
 
 	// Substantial response without tool calls is likely final
 	return len(response) > 500
+}
+
+// qualityGateViolation returns (corrective prompt, true) when the daemon
+// is trying to finish without satisfying its role obligations.
+//
+// Two rules today, both load-bearing:
+//
+//  1. Multi-daemon worker with downstream consumers MUST call
+//     produce_artifact at least once. Without it, the downstream daemon
+//     reads an empty artifact store and re-derives everything from the
+//     thin summary — the whole point of the artifact handoff.
+//
+//  2. A "researcher" role MUST have called at least one
+//     information-gathering tool (search_web, fetch_url, read_file,
+//     etc.). Empirically, when a researcher daemon finishes without
+//     ever searching, the output is hallucinated 95% of the time.
+//
+// Both rules are skipped when no relevant tools were available at all
+// (e.g. search disabled by config) so we don't punish daemons for
+// constraints they didn't choose.
+func (r *DaemonRunner) qualityGateViolation(response string) (string, bool) {
+	// Rule 1: multi-daemon handoff
+	if r.multiDaemonCtx != nil && r.multiDaemonCtx.HasDownstream {
+		if r.toolsUsed["produce_artifact"] == 0 {
+			return "Hold on — downstream daemons depend on your output, but you never called " +
+				"produce_artifact. Without it they get only your summary and have to redo your work. " +
+				"Call produce_artifact now with the full structured result (name it descriptively, " +
+				"content_type=\"markdown\" or \"json\" as appropriate), THEN write your final summary.", true
+		}
+	}
+
+	// Rule 2: researcher must search
+	role := strings.ToLower(r.instance.Role)
+	roleLabel := strings.ToLower(r.instance.RoleLabel)
+	isResearcher := strings.Contains(role, "research") ||
+		strings.Contains(roleLabel, "research") ||
+		strings.Contains(roleLabel, "investigat") ||
+		strings.Contains(roleLabel, "gather")
+	if isResearcher {
+		searchTools := []string{"search_web", "web_search", "fetch_url", "fetch_web", "read_file", "list_artifacts", "read_artifact"}
+		usedAny := false
+		for _, t := range searchTools {
+			if r.toolsUsed[t] > 0 {
+				usedAny = true
+				break
+			}
+		}
+		if !usedAny {
+			return "Stop. You're labeled a research daemon but you have not called a single " +
+				"information-gathering tool (search_web, fetch_url, read_artifact, etc.). " +
+				"Anything you 'know' right now is from training data and may be wrong or outdated. " +
+				"Use search_web (or read_artifact if a predecessor produced one) BEFORE writing your findings.", true
+		}
+	}
+
+	return "", false
 }
 
 // complete finalizes the daemon with a successful result

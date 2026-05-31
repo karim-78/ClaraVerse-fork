@@ -172,6 +172,29 @@ export function Nexus() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Rehydrate the active-daemons map from REST so the live activity panel
+  // is repopulated after a hard reload (where sessionStorage-persisted
+  // conversation may be empty). We don't pull each daemon's full message
+  // log — that's heavy and arrives via WS daemon_thinking/daemon_tool_*
+  // updates anyway. We just need the daemons themselves so the panel
+  // header + status + current_action render immediately.
+  const addDaemon = useNexusStore(s => s.addDaemon);
+  useEffect(() => {
+    let cancelled = false;
+    nexusService
+      .listDaemons()
+      .then(daemons => {
+        if (cancelled) return;
+        for (const d of daemons) addDaemon(d);
+      })
+      .catch(err => {
+        console.warn('[Nexus] active daemon rehydrate failed:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [addDaemon]);
+
   // Fetch projects on connect; auto-create a default if none exist
   const fetchingProjectsRef = useRef(false);
   useEffect(() => {

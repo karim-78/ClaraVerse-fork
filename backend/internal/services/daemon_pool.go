@@ -201,7 +201,12 @@ func (p *DaemonPool) UnregisterRunner(daemonID string) {
 	p.runners.Delete(daemonID)
 }
 
-// Cancel stops a specific daemon by calling its cancel func
+// Cancel stops a specific daemon by calling its cancel func.
+//
+// Deprecated: prefer CancelForUser, which verifies ownership before
+// touching the runner map. This bare Cancel exists only for internal
+// callers that already validated ownership upstream (e.g. orchestrator
+// cleanup paths that loaded the daemon themselves).
 func (p *DaemonPool) Cancel(daemonID string) error {
 	val, ok := p.runners.Load(daemonID)
 	if !ok {
@@ -211,6 +216,27 @@ func (p *DaemonPool) Cancel(daemonID string) error {
 	cancel()
 	p.runners.Delete(daemonID)
 	return nil
+}
+
+// CancelForUser cancels a daemon only if it belongs to the requesting
+// user. Required ownership check for any external/HTTP/WebSocket caller —
+// without it, anyone with a daemon ObjectID could cancel another user's
+// daemon. ObjectIDs are random enough that this is hard to exploit
+// blindly, but the architectural gap should still be closed.
+//
+// Returns an error if the daemon doesn't exist OR belongs to a
+// different user; both surface the same "not found" to the caller so
+// daemon existence doesn't leak across users.
+func (p *DaemonPool) CancelForUser(ctx context.Context, userID, daemonIDHex string) error {
+	oid, err := primitive.ObjectIDFromHex(daemonIDHex)
+	if err != nil {
+		return fmt.Errorf("daemon not found")
+	}
+	d, err := p.GetByID(ctx, userID, oid)
+	if err != nil || d == nil {
+		return fmt.Errorf("daemon not found")
+	}
+	return p.Cancel(daemonIDHex)
 }
 
 // CancelAllForUser cancels all running daemons for a user
