@@ -489,25 +489,79 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 
 // ── Context Management ─────────────────────────────────────────────
 
-// adaptiveResultCap returns the max chars for tool results based on context fill ratio.
+// adaptiveResultCap returns the max chars for tool results based on context
+// fill ratio.
+//
+// Tightened on 2026-05-31: Bedrock's /openai/v1 shim returned 400
+// ("Unterminated string at column 11") on bodies above ~25 KB even though
+// the Go json encoder produced valid output. The fix isn't on our parser
+// side — it's that the receiving shim has an undocumented body/string-
+// length limit. Capping tool results at 6 KB instead of 16 KB keeps the
+// total request body well under that ceiling across all fill-ratio buckets
+// while still giving the model enough context to keep working.
+//
+// Trade-off: a single very long tool result (e.g. a 20 KB page scrape)
+// loses more detail than before. The model can mitigate by calling the
+// tool with narrower selectors or using read_artifact on a stored chunk.
+// We log the truncation so it's visible.
 func (r *DaemonRunner) adaptiveResultCap() int {
-	// Use lastPromptTokens (real) if available, otherwise estimate
 	usedTokens := r.lastPromptTokens
 	if usedTokens == 0 {
-		usedTokens = r.toolDefTokens + 2000 // rough baseline
+		usedTokens = r.toolDefTokens + 2000
 	}
 
 	fillRatio := float64(usedTokens) / float64(r.contextWindow)
 
 	switch {
 	case fillRatio < 0.40:
-		return 16000
+		return 6000
 	case fillRatio < 0.65:
-		return 8000
-	case fillRatio < 0.80:
 		return 4000
+	case fillRatio < 0.80:
+		return 2500
 	default:
-		return 2000
+		return 1500
+	}
+}
+
+// shrinkToolMessagesAggressively trims every "tool" role message in the
+// conversation to a short head+tail snippet (~600 chars total each).
+// Called as a last resort when the marshalled body exceeds the provider's
+// hard size limit — we need to fit the request through somehow, and
+// tool-result bodies are by far the largest mutable thing in the message
+// history. Preserves the FIRST message (system prompt) and the LAST tool
+// message (the model is mid-loop and needs to see the most-recent
+// result intact).
+func shrinkToolMessagesAggressively(messages []map[string]interface{}) {
+	if len(messages) < 2 {
+		return
+	}
+	const keepChars = 600
+	const headChars = 350
+	const tailChars = 200
+	// Find last tool-role index so we can leave it intact.
+	lastTool := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if role, _ := messages[i]["role"].(string); role == "tool" {
+			lastTool = i
+			break
+		}
+	}
+	for i := 1; i < len(messages); i++ {
+		if i == lastTool {
+			continue
+		}
+		role, _ := messages[i]["role"].(string)
+		if role != "tool" {
+			continue
+		}
+		content, _ := messages[i]["content"].(string)
+		if len(content) <= keepChars {
+			continue
+		}
+		messages[i]["content"] = content[:headChars] +
+			"\n\n... [shrunk to fit provider body limit] ...\n\n" +
+			content[len(content)-tailChars:]
 	}
 }
 
@@ -785,15 +839,42 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 	// appear in a message. Diagnosed live 2026-05-31 — any system prompt
 	// containing `<...>` syntax (template hints, code samples, daemon
 	// orchestration instructions) tripped the loop.
-	var reqBuf bytes.Buffer
-	enc := json.NewEncoder(&reqBuf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(reqBody); err != nil {
+	marshalBody := func() ([]byte, error) {
+		var buf bytes.Buffer
+		e := json.NewEncoder(&buf)
+		e.SetEscapeHTML(false)
+		if err := e.Encode(reqBody); err != nil {
+			return nil, err
+		}
+		// Encoder appends a trailing newline; trim for cleaner body +
+		// accurate Content-Length.
+		return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	}
+
+	reqJSON, err := marshalBody()
+	if err != nil {
 		return "", nil, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
-	// Encoder appends a trailing newline; harmless to HTTP but trim for
-	// cleaner request bodies + accurate Content-Length.
-	reqJSON := bytes.TrimRight(reqBuf.Bytes(), "\n")
+
+	// Hard body-size guard. Bedrock's /openai/v1 shim has an undocumented
+	// limit somewhere in the 20-25KB range; bodies above it come back as
+	// 400 "Unterminated string at column 11" regardless of actual content
+	// validity. We detect oversized bodies, aggressively summarize older
+	// tool messages, re-marshal, and try again. This trades a small loss
+	// of tool history for the orchestration actually completing — much
+	// better than the previous failure mode of dying mid-loop.
+	const bodyHardLimit = 20000
+	if len(reqJSON) > bodyHardLimit {
+		log.Printf("[DAEMON %s] body %d bytes > %d limit — shrinking tool history",
+			r.instance.RoleLabel, len(reqJSON), bodyHardLimit)
+		shrinkToolMessagesAggressively(messages)
+		reqJSON, err = marshalBody()
+		if err != nil {
+			return "", nil, "", fmt.Errorf("failed to marshal after shrink: %w", err)
+		}
+		log.Printf("[DAEMON %s] after shrink: %d bytes",
+			r.instance.RoleLabel, len(reqJSON))
+	}
 
 	url := config.BaseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqJSON))

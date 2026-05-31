@@ -160,43 +160,25 @@ func (b *CortexContextBuilder) BuildDaemonSystemPrompt(
 	// 1. Role persona
 	sb.WriteString(fmt.Sprintf("You are a %s Daemon — %s\n\n", roleLabel, persona))
 
-	// 2. Multi-daemon orchestration position. Comes early because it
-	// shapes *how* the daemon should approach the task — produce
-	// structured artifacts vs just summarising.
+	// 2. Multi-daemon orchestration position — kept TERSE on purpose.
+	// Long system-prompt sections have repeatedly tripped strict
+	// OpenAI-compatible shims (Bedrock returned 400s on the verbose
+	// form). Three lines that produce the right behaviour beat twenty
+	// lines that don't reach the model.
 	if multi != nil {
-		sb.WriteString("## Orchestration Context\n\n")
-		sb.WriteString(fmt.Sprintf("You are daemon %d of %d in a multi-agent orchestration.\n",
+		suggested := multi.SuggestedArtifactName
+		if suggested == "" {
+			suggested = role + "-output"
+		}
+		sb.WriteString(fmt.Sprintf("Position: daemon %d of %d.\n",
 			multi.PlanIndex+1, multi.TotalDaemons))
 		if multi.HasDownstream {
-			if len(multi.DownstreamRoles) > 0 {
-				sb.WriteString(fmt.Sprintf("Downstream daemons that depend on your output: %s.\n",
-					strings.Join(multi.DownstreamRoles, ", ")))
-			} else {
-				sb.WriteString("At least one downstream daemon depends on your output.\n")
-			}
-			suggested := multi.SuggestedArtifactName
-			if suggested == "" {
-				suggested = role + "-output"
-			}
-			// IMPORTANT — keep this prompt free of `<` and `>` chars. Go's json
-			// encoder HTML-escapes them as < / >, and Bedrock's
-			// /openai/v1 shim returns 400 ("Expecting value") when those
-			// sequences appear in a message body. Verified live on
-			// 2026-05-31: replacing literal <...> placeholders with square
-			// brackets [...] unblocks the loop.
 			sb.WriteString(fmt.Sprintf(
-				"**IMPORTANT — Hand off your work via artifacts.** Do NOT rely on the text "+
-					"summary alone (it's capped at about 4000 chars and loses structure). When you have "+
-					"your main output ready, call:\n\n"+
-					"  produce_artifact(name=\"%s\", content_type=\"markdown\", content=[your full output here], summary=[one-line description])\n\n"+
-					"Downstream daemons will see the artifact in their catalogue and call "+
-					"read_artifact(\"%s\") to pull the full body. Without this, they have to "+
-					"guess from your summary and the orchestration loses its value.\n",
-				suggested, suggested))
+				"Handoff: when ready, call produce_artifact name=%q content_type=\"markdown\" with your full output. Downstream daemons will read_artifact it.\n\n",
+				suggested))
 		} else {
-			sb.WriteString("You are the final daemon in this chain. Your output goes directly to the user via synthesis.\n")
+			sb.WriteString("Final daemon — your output goes to the user.\n\n")
 		}
-		sb.WriteString("\n")
 	}
 
 	// 3. Task goal
