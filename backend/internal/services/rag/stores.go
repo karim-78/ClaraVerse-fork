@@ -180,6 +180,17 @@ func (s *CollectionStore) Get(ctx context.Context, userID string, projectID prim
 	return &c, nil
 }
 
+// MarkSparseEnabled flips the per-project hybrid-search flag. Called
+// at first ingest of a freshly-provisioned collection so the Qdrant
+// collection is created with sparse vectors configured. Pre-existing
+// collections from Phase A keep the flag false until they're
+// reingested — Qdrant collections can't be retrofitted with a new
+// vector kind, only recreated.
+func (s *CollectionStore) MarkSparseEnabled(ctx context.Context, id primitive.ObjectID) error {
+	_, err := s.col.UpdateByID(ctx, id, bson.M{"$set": bson.M{"sparseEnabled": true}})
+	return err
+}
+
 // IncrementChunks adjusts the per-project chunk + file counters.
 // Called from the ingest worker on file completion and from delete.
 func (s *CollectionStore) IncrementChunks(ctx context.Context, projectID primitive.ObjectID, deltaFiles, deltaChunks int) error {

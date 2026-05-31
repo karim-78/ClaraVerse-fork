@@ -3,6 +3,7 @@ package execution
 import (
 	"claraverse/internal/models"
 	"claraverse/internal/services"
+	"claraverse/internal/services/rag"
 	"claraverse/internal/tools"
 	"context"
 	"fmt"
@@ -29,6 +30,7 @@ func NewExecutorRegistry(
 	providerService *services.ProviderService,
 	toolRegistry *tools.Registry,
 	credentialService *services.CredentialService,
+	ragService *rag.Service,
 ) *ExecutorRegistry {
 	return &ExecutorRegistry{
 		executors: map[string]BlockExecutor{
@@ -67,6 +69,12 @@ func NewExecutorRegistry(
 			"limit":       NewLimitExecutor(),
 			"deduplicate": NewDeduplicateExecutor(),
 			"wait":        NewWaitExecutor(),
+
+			// === Knowledge / RAG ==========================================
+			// Project-scoped retrieval block. Returns chunks for downstream
+			// LLM consumption. Same backend Service as chat + Nexus tools —
+			// just exposed as an explicit node in the visual workflow.
+			"knowledge_search": NewKnowledgeSearchExecutor(ragService),
 		},
 	}
 }

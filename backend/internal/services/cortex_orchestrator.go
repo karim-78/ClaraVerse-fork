@@ -263,7 +263,7 @@ func (s *CortexService) HandleUserMessage(
 		s.publish(userID, "cortex_thinking", map[string]string{"content": "Analyzing your request..."})
 
 		var err error
-		classification, err = s.classifyRequest(execCtx, userID, modelID, message, systemPrompt, recentMessages, activeDaemons)
+		classification, err = s.classifyRequest(execCtx, userID, modelID, message, systemPrompt, recentMessages, activeDaemons, projectIDOrZero(pendingTask))
 		if err != nil {
 			log.Printf("[CORTEX] Classification failed for user %s: %v", userID, err)
 			classification = &ClassificationResult{Mode: "quick"}
@@ -301,8 +301,16 @@ func (s *CortexService) classifyRequest(
 	systemPrompt string,
 	recentMessages []map[string]interface{},
 	activeDaemons []models.Daemon,
+	projectID primitive.ObjectID, // for the knowledge-presence check; zero = no project
 ) (*ClassificationResult, error) {
-	classificationPrompt := s.contextBuilder.BuildClassificationPrompt(ctx, userID, activeDaemons)
+	// Tell the classifier whether this project has indexed knowledge,
+	// so it can bias toward daemon/multi_daemon (which will then get
+	// search_knowledge auto-injected) over quick mode for lookups.
+	hasKnowledge := false
+	if s.ragSearcher != nil && !projectID.IsZero() {
+		hasKnowledge = s.ragSearcher.HasKnowledge(ctx, userID, projectID)
+	}
+	classificationPrompt := s.contextBuilder.BuildClassificationPrompt(ctx, userID, activeDaemons, hasKnowledge)
 
 	messages := []map[string]interface{}{
 		{"role": "system", "content": classificationPrompt},
@@ -550,6 +558,8 @@ func (s *CortexService) handleDaemonMode(
 		ContextBuilder:  s.contextBuilder,
 		ToolSelector:    s.toolSelector,
 		ArtifactStore:   s.artifactStore, // single-daemon path also needs this so produce/list/read_artifact work
+		RAGService:      s.ragSearcher,
+		ProjectID:       projectIDOrZero(task),
 		OriginalMessage:    message,
 		ProjectInstruction: projectInstruction,
 		SkillIDs:           skillIDs,
@@ -672,7 +682,7 @@ func (s *CortexService) handleMultiDaemonMode(
 		daemons[plan.Index] = daemon
 	}
 
-	s.orchestrateMultiDaemon(ctx, userID, sessionID, parentTask.ID, modelID, message, classification.Daemons, daemons, projectInstruction, parentTask.Source == "routine", skillIDs, nil)
+	s.orchestrateMultiDaemon(ctx, userID, sessionID, parentTask.ID, modelID, message, classification.Daemons, daemons, projectInstruction, parentTask.Source == "routine", skillIDs, nil, projectIDOrZero(parentTask))
 }
 
 // orchestrateMultiDaemon manages the dependency-coordinated execution of multiple daemons.
@@ -701,6 +711,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 	isRoutine bool,
 	skillIDs []primitive.ObjectID,
 	resumeCompleted map[int]*DaemonResult,
+	projectID primitive.ObjectID, // parent task's project; passed to each daemon for RAG scoping
 ) {
 	// === Durability: init state + heartbeat ====================================
 	if s.nexusOrchStore != nil {
@@ -712,6 +723,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 			SessionID:          sessionID,
 			UserID:             userID,
 			ParentTaskID:       parentTaskID,
+			ProjectID:          projectID,
 			ModelID:            modelID,
 			OriginalMessage:    originalMessage,
 			ProjectInstruction: projectInstruction,
@@ -787,7 +799,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 			})
 
 			wg.Add(1)
-			s.launchDaemon(ctx, userID, daemon, plan.Index, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans)
+			s.launchDaemon(ctx, userID, daemon, plan.Index, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans, projectID)
 			mu.Lock()
 			running++
 			mu.Unlock()
@@ -883,7 +895,7 @@ func (s *CortexService) orchestrateMultiDaemon(
 					})
 
 					wg.Add(1)
-					s.launchDaemon(ctx, userID, pendingDaemon, idx, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans)
+					s.launchDaemon(ctx, userID, pendingDaemon, idx, depResults, originalMessage, updateChan, projectInstruction, skillIDs, &wg, plans, projectID)
 					running++
 				}
 			}
@@ -1062,6 +1074,7 @@ func (s *CortexService) ResumeOrchestration(ctx context.Context, state NexusOrch
 		state.IsRoutine,
 		state.SkillIDs,
 		resumeCompleted,
+		state.ProjectID,
 	)
 }
 
@@ -1113,6 +1126,16 @@ func buildMultiDaemonContext(planIndex int, plans []DaemonPlan) *MultiDaemonCont
 	}
 }
 
+// projectIDOrZero is the safe extractor for task.ProjectID (which is
+// *primitive.ObjectID and can be nil for "inbox" tasks). Returns
+// NilObjectID so downstream HasKnowledge checks fail cleanly.
+func projectIDOrZero(task *models.NexusTask) primitive.ObjectID {
+	if task == nil || task.ProjectID == nil {
+		return primitive.NilObjectID
+	}
+	return *task.ProjectID
+}
+
 // launchDaemon starts a daemon runner in a goroutine.
 // wg is optional — when non-nil, wg.Done() is called when the goroutine exits.
 // plans is the full plan slice; we compute the MultiDaemonContext from it
@@ -1130,6 +1153,7 @@ func (s *CortexService) launchDaemon(
 	skillIDs []primitive.ObjectID,
 	wg *sync.WaitGroup,
 	plans []DaemonPlan,
+	projectID primitive.ObjectID, // parent task's project, used for RAG scoping
 ) {
 	runner := NewDaemonRunner(DaemonRunnerConfig{
 		Daemon:          daemon,
@@ -1146,6 +1170,8 @@ func (s *CortexService) launchDaemon(
 		ContextBuilder:  s.contextBuilder,
 		ToolSelector:    s.toolSelector,
 		ArtifactStore:   s.artifactStore,
+		RAGService:      s.ragSearcher,
+		ProjectID:       projectID,
 		DepResults:         depResults,
 		OriginalMessage:    originalMessage,
 		ProjectInstruction: projectInstruction,
@@ -1873,6 +1899,13 @@ Instructions: Address the original request completely. Use different tools or ap
 		ContextBuilder:     s.contextBuilder,
 		ToolSelector:       s.toolSelector,
 		ArtifactStore:      s.artifactStore, // retry path also needs this so produce/list/read_artifact work
+		RAGService:         s.ragSearcher,
+		ProjectID: func() primitive.ObjectID {
+			if projectID == nil {
+				return primitive.NilObjectID
+			}
+			return *projectID
+		}(),
 		OriginalMessage:    enhancedMessage,
 		ProjectInstruction: retryProjectInstruction,
 	})
@@ -2032,7 +2065,7 @@ func (s *CortexService) handleRetryDispatch(
 	}
 
 	// Classify (may choose a different mode with error context)
-	classification, err := s.classifyRequest(execCtx, userID, originalTask.ModelID, enhancedMessage, systemPrompt, recentMessages, activeDaemons)
+	classification, err := s.classifyRequest(execCtx, userID, originalTask.ModelID, enhancedMessage, systemPrompt, recentMessages, activeDaemons, projectIDOrZero(originalTask))
 	if err != nil {
 		log.Printf("[CORTEX] Retry classification failed, defaulting to daemon: %v", err)
 		classification = &ClassificationResult{Mode: "daemon"}

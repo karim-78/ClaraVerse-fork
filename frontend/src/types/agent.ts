@@ -117,7 +117,8 @@ export type BlockType =
   | 'sort'
   | 'limit'
   | 'deduplicate'
-  | 'wait';
+  | 'wait'
+  | 'knowledge_search';
 
 export interface Block {
   id: string;
@@ -784,6 +785,11 @@ export const BLOCK_TYPE_INFO: Record<BlockType, { label: string; icon: string; c
     label: 'Wait',
     icon: 'Timer',
     color: 'bg-slate-500',
+  },
+  knowledge_search: {
+    label: 'Knowledge Search',
+    icon: 'BookOpen',
+    color: 'bg-pink-500',
   },
 };
 

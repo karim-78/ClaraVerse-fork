@@ -71,6 +71,10 @@ type NexusOrchestrationState struct {
 	SessionID           primitive.ObjectID                `bson:"session_id" json:"session_id"`
 	UserID              string                            `bson:"user_id" json:"user_id"`
 	ParentTaskID        primitive.ObjectID                `bson:"parent_task_id" json:"parent_task_id"`
+	// ProjectID lets a resumed orchestration re-attach search_knowledge
+	// to each daemon. Optional — older state records (or tasks created
+	// without a project) leave this as the zero ObjectID.
+	ProjectID           primitive.ObjectID                `bson:"project_id,omitempty" json:"project_id,omitempty"`
 	ModelID             string                            `bson:"model_id" json:"model_id"`
 	OriginalMessage     string                            `bson:"original_message" json:"original_message"`
 	ProjectInstruction  string                            `bson:"project_instruction,omitempty" json:"project_instruction,omitempty"`

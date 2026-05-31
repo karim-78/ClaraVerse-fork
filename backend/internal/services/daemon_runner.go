@@ -74,6 +74,14 @@ type DaemonRunner struct {
 	contextBuilder  *CortexContextBuilder
 	toolSelector    *CortexToolSelector
 	artifactStore   *NexusArtifactStore // optional; enables produce/list/read_artifact tools
+	// ragService is optional. When set AND the daemon's project has
+	// indexed knowledge, search_knowledge is injected into the
+	// daemon's tool list. The runner does NOT take a hard dep on RAG
+	// because Phase A/B might be running before any knowledge is
+	// uploaded — a nil ragService just means "no project knowledge
+	// available for this run."
+	ragService RAGSearcher
+	projectID  primitive.ObjectID // task's project scope; used for RAG
 
 	// multiDaemonCtx is non-nil iff this daemon is part of a multi-daemon
 	// orchestration. When set, the system prompt explicitly teaches the
@@ -81,6 +89,14 @@ type DaemonRunner struct {
 	// handoff — without it the model defaults to summary-only handoff and
 	// the structured store sits unused.
 	multiDaemonCtx *MultiDaemonContext
+
+	// injectedTools is the runtime tool registry scoped to THIS runner.
+	// Tools placed here are visible to the LLM AND directly dispatched
+	// by executeTool — bypassing the global/user registry entirely.
+	// Used for context-bound tools like search_knowledge that carry
+	// per-user, per-project closure state and shouldn't bleed across
+	// runners. Keyed by tool name.
+	injectedTools map[string]*tools.Tool
 
 	// toolsUsed tracks how many times each tool was successfully invoked
 	// during this daemon's run. Consumed by the quality gate to verify
@@ -113,6 +129,8 @@ type DaemonRunnerConfig struct {
 	ContextBuilder  *CortexContextBuilder
 	ToolSelector    *CortexToolSelector
 	ArtifactStore   *NexusArtifactStore
+	RAGService      RAGSearcher                // Optional; enables search_knowledge when project has indexed files
+	ProjectID       primitive.ObjectID         // Project this daemon's task lives in; needed for RAG scoping
 	DepResults         map[string]string          // Predecessor daemon results
 	OriginalMessage    string                     // User's original message (passed through to daemon)
 	ProjectInstruction string                     // System instruction from the containing project
@@ -148,6 +166,7 @@ func NewDaemonRunner(cfg DaemonRunnerConfig) *DaemonRunner {
 		cancelFunc:         cancel,
 		contextWindow:      contextWindow,
 		toolsUsed:          make(map[string]int),
+		injectedTools:      make(map[string]*tools.Tool),
 		chatService:     cfg.ChatService,
 		providerService: cfg.ProviderService,
 		toolRegistry:    cfg.ToolRegistry,
@@ -158,6 +177,8 @@ func NewDaemonRunner(cfg DaemonRunnerConfig) *DaemonRunner {
 		contextBuilder:  cfg.ContextBuilder,
 		toolSelector:    cfg.ToolSelector,
 		artifactStore:   cfg.ArtifactStore,
+		ragService:      cfg.RAGService,
+		projectID:       cfg.ProjectID,
 	}
 }
 
@@ -320,6 +341,36 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 		r.instance.AssignedTools,
 		userPrompt,
 	)
+
+	// 2a. Inject search_knowledge when the daemon's project has
+	// indexed knowledge. We add it to BOTH the OpenAI-format tool
+	// list passed to the LLM AND register it in the per-user tool
+	// registry so executeTool() can find it by name when the model
+	// calls it. Kept conditional — if the project has no knowledge,
+	// surfacing the tool would just confuse the model.
+	if r.ragService != nil && !r.projectID.IsZero() {
+		if r.ragService.HasKnowledge(ctx, r.userID, r.projectID) {
+			tool := r.ragService.BuildSearchTool(r.userID, []string{r.projectID.Hex()})
+			if tool != nil {
+				// Add to LLM-visible tool list (OpenAI format).
+				selectedTools = append(selectedTools, map[string]interface{}{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        tool.Name,
+						"description": tool.Description,
+						"parameters":  tool.Parameters,
+					},
+				})
+				toolNames = append(toolNames, tool.Name)
+				// Stash on the runner so executeTool can dispatch by
+				// name. Do NOT register in the user-tool map — the
+				// selector + tool_service treat that map as MCP-only
+				// territory and will misroute the dispatch.
+				r.injectedTools[tool.Name] = tool
+				log.Printf("[DAEMON %s] Injected search_knowledge for project %s", r.instance.RoleLabel, r.projectID.Hex())
+			}
+		}
+	}
 
 	// Cache tool definition token estimate for context tracking
 	r.toolDefTokens = EstimateToolDefTokens(selectedTools)
@@ -1319,6 +1370,20 @@ func (r *DaemonRunner) executeTool(ctx context.Context, toolName string, argsJSO
 		args[tools.SubagentRunnerKey] = tools.SubagentRunner(r.chatService)
 	}
 
+	// Prefer the per-runner injected tool when present. This is how
+	// context-bound tools like search_knowledge dispatch — bound to
+	// THIS user + project via closure at construction time. Never
+	// goes through the registry, so we can't accidentally bleed
+	// across daemons or users.
+	if injected, ok := r.injectedTools[toolName]; ok && injected != nil && injected.Execute != nil {
+		result, err := injected.Execute(args)
+		if err != nil {
+			log.Printf("[DAEMON %s] Injected tool %s failed: %v", r.instance.RoleLabel, toolName, err)
+			return fmt.Sprintf("Tool error: %v", err)
+		}
+		return result
+	}
+
 	result, err := r.toolRegistry.Execute(toolName, args)
 	if err != nil {
 		log.Printf("[DAEMON %s] Tool %s failed: %v", r.instance.RoleLabel, toolName, err)
@@ -1487,7 +1552,12 @@ func (r *DaemonRunner) qualityGateViolation(response string) (string, bool) {
 		strings.Contains(roleLabel, "investigat") ||
 		strings.Contains(roleLabel, "gather")
 	if isResearcher {
-		searchTools := []string{"search_web", "web_search", "fetch_url", "fetch_web", "read_file", "list_artifacts", "read_artifact"}
+		// search_knowledge counts as a satisfier — querying the
+		// project's knowledge base is information gathering. A
+		// researcher daemon working on a project with uploaded docs
+		// SHOULD reach for search_knowledge before search_web; the
+		// classifier prompt and the tool description both nudge this.
+		searchTools := []string{"search_web", "web_search", "fetch_url", "fetch_web", "read_file", "list_artifacts", "read_artifact", "search_knowledge"}
 		usedAny := false
 		for _, t := range searchTools {
 			if r.toolsUsed[t] > 0 {

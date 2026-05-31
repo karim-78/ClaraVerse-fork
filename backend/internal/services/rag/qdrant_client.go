@@ -284,6 +284,76 @@ func (c *QdrantClient) SearchDense(ctx context.Context, collection string, vec D
 	return body2.Result, nil
 }
 
+// SearchHybrid runs dense + sparse retrieval with reciprocal-rank
+// fusion via Qdrant's /points/query endpoint. Returns the top `limit`
+// hits across both vector kinds.
+//
+// We use the "prefetch" + RRF pattern that's Qdrant's recommended way
+// to combine vector kinds: each prefetch returns its own top-K, then
+// the outer query fuses by reciprocal rank. The sparse vector
+// catches keyword matches (proper nouns, codenames, exact-match
+// queries) that dense embeddings smooth over.
+//
+// Falls back to dense-only when the caller passes an empty sparse
+// vector — handy for queries against pre-Phase-C collections that
+// don't have sparse indexed.
+func (c *QdrantClient) SearchHybrid(ctx context.Context, collection string, dense DenseVec, sparse SparseVec, filter map[string]any, limit int) ([]SearchHit, error) {
+	if len(sparse.Indices) == 0 {
+		// Dense-only fallback — sparse missing means either an older
+		// collection or the sidecar didn't produce one. Caller doesn't
+		// need to switch code paths.
+		return c.SearchDense(ctx, collection, dense, filter, limit)
+	}
+	body, _ := json.Marshal(map[string]any{
+		"prefetch": []map[string]any{
+			{
+				"query": dense,
+				"using": "dense",
+				"limit": limit * 2,
+			},
+			{
+				"query": map[string]any{
+					"indices": sparse.Indices,
+					"values":  sparse.Values,
+				},
+				"using": "sparse",
+				"limit": limit * 2,
+			},
+		},
+		"query": map[string]any{
+			"fusion": "rrf",
+		},
+		"filter":       filter,
+		"limit":        limit,
+		"with_payload": true,
+	})
+	url := fmt.Sprintf("%s/collections/%s/points/query", c.baseURL, collection)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("qdrant hybrid %s: %w", collection, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("qdrant hybrid %s: status %d: %s", collection, resp.StatusCode, string(b))
+	}
+	// /points/query wraps results in {result: {points: [...]}}
+	var body2 struct {
+		Result struct {
+			Points []SearchHit `json:"points"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body2); err != nil {
+		return nil, fmt.Errorf("qdrant hybrid decode: %w", err)
+	}
+	return body2.Result.Points, nil
+}
+
 // Ping checks Qdrant liveness. Returns nil on success.
 func (c *QdrantClient) Ping(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/healthz", nil)

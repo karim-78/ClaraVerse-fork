@@ -452,7 +452,13 @@ func main() {
 	}
 
 	// Initialize workflow execution engine with block checker support
-	executorRegistry := execution.NewExecutorRegistry(chatService, providerService, tools.GetRegistry(), credentialService)
+	// ragService is wired further down (after Mongo init); pass nil
+	// here. The executor accepts nil — knowledge_search blocks would
+	// return "RAG service not configured" at runtime in that case.
+	// We keep the registry creation early so block scheduling can
+	// proceed; ragService becomes available before any user can
+	// trigger a workflow run.
+	executorRegistry := execution.NewExecutorRegistry(chatService, providerService, tools.GetRegistry(), credentialService, nil)
 	workflowEngine := execution.NewWorkflowEngineWithChecker(executorRegistry, providerService)
 	log.Println("✅ Workflow execution engine initialized (with block checker)")
 
@@ -996,6 +1002,18 @@ func main() {
 		}
 		ragService = rag.NewService(mongoDB, qdrantURL, embeddingsURL, "./uploads")
 		log.Printf("🔎 RAG wired — qdrant=%s embeddings=%s", qdrantURL, embeddingsURL)
+		// Cortex picks up the searcher so daemons on project-scoped
+		// tasks get search_knowledge automatically when the project
+		// has indexed files.
+		cortexService.SetRAGSearcher(services.NewRAGSearcher(ragService))
+		// Workflow knowledge_search block: re-register with the live
+		// rag service so it actually does something. The placeholder
+		// nil-backed executor registered at startup returns a clear
+		// error; this replaces it with the real thing.
+		if executorRegistry != nil {
+			executorRegistry.Register("knowledge_search", execution.NewKnowledgeSearchExecutor(ragService))
+			log.Printf("✅ knowledge_search workflow block wired to RAG service")
+		}
 
 		// Wire sync services into MCP WebSocket handler for TUI ↔ cloud sync
 		mcpWSHandler.SetSyncServices(engramService, personaService, nexusEventBus, nexusSessionStore)

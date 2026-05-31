@@ -270,7 +270,12 @@ func (b *CortexContextBuilder) BuildSkillsSection(ctx context.Context, skillIDs 
 // This is a STANDALONE system prompt — it should NOT be combined with the full Cortex context.
 // It accepts activeDaemons so the classifier can detect status/continuation queries.
 // It injects available daemon templates so the LLM can match requests to pre-configured daemons.
-func (b *CortexContextBuilder) BuildClassificationPrompt(ctx context.Context, userID string, activeDaemons []models.Daemon) string {
+//
+// projectHasKnowledge: when true, the classifier prefers daemon/multi_daemon over quick
+// for research-shaped queries, and the daemon's task_summary hints that
+// search_knowledge should be tried before search_web. Caller passes the result of
+// rag.Service.HasKnowledge(userID, projectID) — nil-safe by being a plain bool.
+func (b *CortexContextBuilder) BuildClassificationPrompt(ctx context.Context, userID string, activeDaemons []models.Daemon, projectHasKnowledge bool) string {
 	var sb strings.Builder
 
 	sb.WriteString(`You are a task classifier. Your ONLY job is to classify the user's message and output JSON. Do NOT answer the user's question. Do NOT provide any explanation. Respond with ONLY a JSON object.
@@ -333,6 +338,24 @@ MULTI_DAEMON: ANY task with two or more distinct verbs/outputs. **Default to thi
 			}
 			sb.WriteString("\n")
 		}
+	}
+
+	if projectHasKnowledge {
+		sb.WriteString(`PROJECT KNOWLEDGE BASE:
+This project has uploaded documents indexed in its knowledge base. Daemons
+spawned on this project automatically receive a search_knowledge tool that
+retrieves relevant chunks from those documents (cited with file + page).
+
+  - Prefer DAEMON / MULTI_DAEMON for any factual / lookup / research-shaped
+    request — even short ones. The daemon will hit the knowledge base
+    BEFORE the open web, which is much more authoritative for the user's
+    own materials.
+  - When you write task_summary for a researcher role, you can hint at this
+    by phrasing like "Search the project knowledge base for X" rather than
+    "Look up X" — the daemon will pick search_knowledge first when it sees
+    that framing.
+
+`)
 	}
 
 	sb.WriteString(`IMPORTANT TIE-BREAKING RULES:

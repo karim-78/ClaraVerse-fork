@@ -212,8 +212,9 @@ func (s *Service) Search(ctx context.Context, userID string, opts SearchOptions)
 	// Resolve projects to existing collections. Filter out any the
 	// user doesn't own (defense in depth — handlers also check).
 	type projColl struct {
-		projectID  primitive.ObjectID
-		collection string
+		projectID     primitive.ObjectID
+		collection    string
+		sparseEnabled bool
 	}
 	var targets []projColl
 	for _, pid := range opts.ProjectIDs {
@@ -221,14 +222,19 @@ func (s *Service) Search(ctx context.Context, userID string, opts SearchOptions)
 		if err != nil || c == nil || c.ChunkCount == 0 {
 			continue
 		}
-		targets = append(targets, projColl{projectID: pid, collection: c.QdrantCollection})
+		targets = append(targets, projColl{
+			projectID:     pid,
+			collection:    c.QdrantCollection,
+			sparseEnabled: c.SparseEnabled,
+		})
 	}
 	if len(targets) == 0 {
 		return nil, nil // no knowledge anywhere — empty result, not error
 	}
 
-	// Embed the query once.
-	dense, _, err := s.embed.EmbedQuery(ctx, opts.Query)
+	// Embed the query once. Produces both dense + sparse; only the
+	// sparse path uses the sparse vector below.
+	dense, sparse, err := s.embed.EmbedQuery(ctx, opts.Query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
@@ -245,7 +251,19 @@ func (s *Service) Search(ctx context.Context, userID string, opts SearchOptions)
 		wg.Add(1)
 		go func(t projColl) {
 			defer wg.Done()
-			hits, err := s.qdrant.SearchDense(ctx, t.collection, dense, nil, perCandidate)
+			var hits []SearchHit
+			var err error
+			if t.sparseEnabled {
+				// Hybrid (dense + BM25 sparse with RRF fusion). Catches
+				// keyword matches dense alone would miss — codenames,
+				// proper nouns, exact phrases. The single biggest
+				// quality lever in Phase C.
+				hits, err = s.qdrant.SearchHybrid(ctx, t.collection, dense, sparse, nil, perCandidate)
+			} else {
+				// Legacy dense-only path for pre-Phase-C collections.
+				// Same code on the calling side; transparent fallback.
+				hits, err = s.qdrant.SearchDense(ctx, t.collection, dense, nil, perCandidate)
+			}
 			if err != nil {
 				log.Printf("[RAG] search %s: %v", t.collection, err)
 				return
@@ -429,6 +447,15 @@ func (s *Service) processFile(ctx context.Context, file *models.KnowledgeFile) {
 		fail("collection record", err)
 		return
 	}
+	// Sparse vectors are produced by the embeddings sidecar on every
+	// /embed call regardless, so turning hybrid ON is free at ingest
+	// time and pays for itself at query time. New projects default to
+	// sparse-enabled (Phase C); pre-existing collections from Phase A
+	// stay dense-only until the user explicitly reingests.
+	if !coll.SparseEnabled && coll.ChunkCount == 0 {
+		coll.SparseEnabled = true
+		_ = s.collections.MarkSparseEnabled(ctx, coll.ID)
+	}
 	if err := s.qdrant.CreateCollection(ctx, coll.QdrantCollection, dims, coll.SparseEnabled); err != nil {
 		fail("qdrant create collection", err)
 		return
@@ -450,7 +477,7 @@ func (s *Service) processFile(ctx context.Context, file *models.KnowledgeFile) {
 		for j, c := range slice {
 			texts[j] = c.Text
 		}
-		dense, _, _, err := s.embed.EmbedBatch(ctx, texts)
+		dense, sparse, _, err := s.embed.EmbedBatch(ctx, texts)
 		if err != nil {
 			fail("embed batch", err)
 			return
@@ -462,14 +489,24 @@ func (s *Service) processFile(ctx context.Context, file *models.KnowledgeFile) {
 
 		points := make([]Point, len(slice))
 		for j, c := range slice {
+			vectors := map[string]any{
+				"dense": dense[j],
+			}
+			// Only include sparse vectors when the collection is
+			// configured for hybrid. Qdrant rejects writes that
+			// include an unconfigured vector name.
+			if coll.SparseEnabled && j < len(sparse) {
+				vectors["sparse"] = map[string]any{
+					"indices": sparse[j].Indices,
+					"values":  sparse[j].Values,
+				}
+			}
 			points[j] = Point{
 				// Deterministic UUID-v5 from (file_id, chunk_idx) so
 				// re-ingest is idempotent at the Qdrant level — same
 				// chunk gets the same point ID, overwrites cleanly.
-				ID: deterministicID(file.ID.Hex(), c.Idx),
-				Vectors: map[string]any{
-					"dense": dense[j],
-				},
+				ID:      deterministicID(file.ID.Hex(), c.Idx),
+				Vectors: vectors,
 				Payload: map[string]any{
 					"file_id":    file.ID.Hex(),
 					"file_name":  file.Filename,

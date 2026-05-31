@@ -584,6 +584,13 @@ func (r *Registry) GetUserTools(userID string) []map[string]interface{} {
 
 // GetMCPTools returns ONLY the user's MCP tools (not built-in).
 // These are the tools registered by the user's desktop MCP client (Dobby's Claw).
+//
+// IMPORTANT: filters by Source explicitly. Per-user built-in tools
+// (e.g. search_knowledge, which is registered into userTools so it
+// can carry user/project context as a closure) live in the same map
+// but are NOT MCP. Without this filter the daemon dispatcher would
+// route them through the MCP bridge and fail with "client not
+// connected" when no Dobby's Claw is running.
 func (r *Registry) GetMCPTools(userID string) []map[string]interface{} {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -591,6 +598,9 @@ func (r *Registry) GetMCPTools(userID string) []map[string]interface{} {
 	var mcpTools []map[string]interface{}
 	if r.userTools[userID] != nil {
 		for _, tool := range r.userTools[userID] {
+			if tool.Source != ToolSourceMCPLocal {
+				continue
+			}
 			mcpTools = append(mcpTools, map[string]interface{}{
 				"type": "function",
 				"function": map[string]interface{}{

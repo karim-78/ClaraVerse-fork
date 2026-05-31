@@ -26,6 +26,7 @@ import {
   ListEnd,
   CopyMinus,
   Timer,
+  BookOpen,
   icons,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -235,6 +236,15 @@ const BLOCK_CATEGORIES: { name: string; blocks: BlockDef[] }[] = [
         bgColor: 'bg-pink-500/10',
         blockType: 'sub_agent',
       },
+      {
+        id: 'knowledge_search',
+        label: 'Knowledge Search',
+        description: 'Search project knowledge base (RAG)',
+        icon: BookOpen,
+        color: 'text-pink-500',
+        bgColor: 'bg-pink-500/10',
+        blockType: 'knowledge_search',
+      },
     ],
   },
 ];
@@ -369,6 +379,16 @@ function getDefaultConfig(blockType: BlockType): Record<string, unknown> {
         type: 'wait',
         duration: 1,
         unit: 'seconds',
+      };
+    case 'knowledge_search':
+      // Defaults: empty project_ids array (user picks at design time
+      // by editing the block config), templated query that reads from
+      // a common variable name, sensible top_k + rerank on.
+      return {
+        project_ids: [],
+        query: '{{input.query}}',
+        top_k: 5,
+        rerank: true,
       };
     default:
       return { type: blockType };

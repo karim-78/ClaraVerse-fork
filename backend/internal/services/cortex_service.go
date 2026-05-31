@@ -58,6 +58,11 @@ type CortexService struct {
 	// resume interrupted runs.
 	nexusOrchStore *NexusOrchestrationStore
 
+	// RAG searcher — when set, daemons running on project-scoped tasks
+	// automatically get search_knowledge injected when the project has
+	// indexed files. Nil disables the feature gracefully.
+	ragSearcher RAGSearcher
+
 	// EventBus — decouples execution from WS lifecycle
 	eventBus *NexusEventBus
 
@@ -119,6 +124,13 @@ func NewCortexService(
 // SetMemorySelectionService sets the memory selection service (late dependency injection)
 func (s *CortexService) SetMemorySelectionService(svc *MemorySelectionService) {
 	s.contextBuilder.memorySelectionSvc = svc
+}
+
+// SetRAGSearcher wires the RAG layer so daemons can get search_knowledge
+// auto-injected on project-scoped tasks. Optional — when nil, daemons
+// run as before with no project-knowledge tool. main.go calls this once.
+func (s *CortexService) SetRAGSearcher(r RAGSearcher) {
+	s.ragSearcher = r
 }
 
 // SetArtifactStore wires the Nexus artifact store. Called by main.go after
