@@ -178,11 +178,17 @@ func (b *CortexContextBuilder) BuildDaemonSystemPrompt(
 			if suggested == "" {
 				suggested = role + "-output"
 			}
+			// IMPORTANT — keep this prompt free of `<` and `>` chars. Go's json
+			// encoder HTML-escapes them as < / >, and Bedrock's
+			// /openai/v1 shim returns 400 ("Expecting value") when those
+			// sequences appear in a message body. Verified live on
+			// 2026-05-31: replacing literal <...> placeholders with square
+			// brackets [...] unblocks the loop.
 			sb.WriteString(fmt.Sprintf(
-				"**CRITICAL — Hand off your work via artifacts.** Do NOT rely on the text "+
-					"summary alone (it's capped at ~4000 chars and loses structure). When you have "+
+				"**IMPORTANT — Hand off your work via artifacts.** Do NOT rely on the text "+
+					"summary alone (it's capped at about 4000 chars and loses structure). When you have "+
 					"your main output ready, call:\n\n"+
-					"  produce_artifact(name=\"%s\", content_type=\"markdown\", content=<full output>, summary=<one-line>)\n\n"+
+					"  produce_artifact(name=\"%s\", content_type=\"markdown\", content=[your full output here], summary=[one-line description])\n\n"+
 					"Downstream daemons will see the artifact in their catalogue and call "+
 					"read_artifact(\"%s\") to pull the full body. Without this, they have to "+
 					"guess from your summary and the orchestration loses its value.\n",

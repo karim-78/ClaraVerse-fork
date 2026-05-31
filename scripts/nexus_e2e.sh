@@ -49,7 +49,7 @@ echo "   Project: ${PROJECT_ID:-<inbox>}"
 echo "   Mode:    ${MODE:-<auto>}"
 echo
 
-START_MS=$(date +%s%3N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1000))')
+START_MS=$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || date +%s)
 
 # Build JSON body. jq if available for safety; else printf-escape.
 if command -v jq >/dev/null 2>&1; then
@@ -72,7 +72,7 @@ HTTP_CODE=$(curl -sS -o "$RESPONSE" -w "%{http_code}" \
   --max-time "$((TIMEOUT + 10))" \
   -d "$BODY")
 
-END_MS=$(date +%s%3N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1000))')
+END_MS=$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || date +%s)
 ELAPSED=$((END_MS - START_MS))
 
 echo "📨 HTTP ${HTTP_CODE}  (${ELAPSED}ms)"

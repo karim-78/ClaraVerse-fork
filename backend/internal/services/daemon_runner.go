@@ -778,10 +778,22 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 		reqBody["tools"] = availableTools
 	}
 
-	reqJSON, err := json.Marshal(reqBody)
-	if err != nil {
+	// Disable HTML-escaping for the request body. Go's default json.Marshal
+	// converts `<`, `>`, `&` to `<`, `>`, `&` — safe for HTML
+	// embedding, but Bedrock's /openai/v1 shim returns
+	// "Expecting value: line 1 column N" when those escaped sequences
+	// appear in a message. Diagnosed live 2026-05-31 — any system prompt
+	// containing `<...>` syntax (template hints, code samples, daemon
+	// orchestration instructions) tripped the loop.
+	var reqBuf bytes.Buffer
+	enc := json.NewEncoder(&reqBuf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(reqBody); err != nil {
 		return "", nil, "", fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// Encoder appends a trailing newline; harmless to HTTP but trim for
+	// cleaner request bodies + accurate Content-Length.
+	reqJSON := bytes.TrimRight(reqBuf.Bytes(), "\n")
 
 	url := config.BaseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqJSON))

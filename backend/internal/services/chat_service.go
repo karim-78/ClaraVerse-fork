@@ -3705,10 +3705,17 @@ func (s *ChatService) ChatCompletionSync(ctx context.Context, userID, modelID st
 		"stream":   false,
 	}
 
-	reqJSON, err := json.Marshal(reqBody)
-	if err != nil {
+	// HTML-escape OFF — same Bedrock /openai/v1 issue documented in
+	// daemon_runner.go: default json.Marshal converts <, >, & to escapes
+	// that the shim rejects. Must keep parity here so chat-side requests
+	// don't trip the same loop.
+	var reqBuf bytes.Buffer
+	enc := json.NewEncoder(&reqBuf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(reqBody); err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
+	reqJSON := bytes.TrimRight(reqBuf.Bytes(), "\n")
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, "POST", config.BaseURL+"/chat/completions", bytes.NewBuffer(reqJSON))
@@ -3809,10 +3816,15 @@ func (s *ChatService) ChatCompletionWithToolsEx(ctx context.Context, userID, con
 			reqBody["tools"] = availableTools
 		}
 
-		reqJSON, err := json.Marshal(reqBody)
-		if err != nil {
+		// HTML-escape OFF — Bedrock /openai/v1 rejects requests with the
+		// HTML-escaped <, >, & sequences Go's json.Marshal emits by default.
+		var reqBuf bytes.Buffer
+		enc := json.NewEncoder(&reqBuf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(reqBody); err != nil {
 			return nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
+		reqJSON := bytes.TrimRight(reqBuf.Bytes(), "\n")
 
 		// Create HTTP request
 		req, err := http.NewRequestWithContext(ctx, "POST", config.BaseURL+"/chat/completions", bytes.NewBuffer(reqJSON))
