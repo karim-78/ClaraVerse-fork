@@ -77,9 +77,39 @@ def _get_rerank():
     return _rerank
 
 
+def _warmup_dense_sparse() -> None:
+    """Trigger dense + sparse model load on a background thread so the
+    FastAPI server can bind its port immediately and start serving
+    /health, while the heavy model download (~133 MB for bge-small)
+    happens in parallel.
+
+    Without this, the lazy-load only fires on the first /embed call.
+    For a fresh deployment that means the Knowledge tab in the UI
+    shows "model warming up" indefinitely until the user actually
+    uploads a file — confusing because nothing is "warming," it just
+    hasn't been needed yet.
+    """
+    try:
+        _get_dense()  # downloads on first call, ~5-60s
+        _get_sparse()
+    except Exception as e:  # noqa: BLE001 — just log; not fatal
+        print(f"[embeddings] warmup failed (will retry lazily): {e!r}")
+
+
+# Kick off warmup in a daemon thread so uvicorn binds the socket
+# immediately. Health check returns dense_loaded=false until the
+# thread completes; consumers can poll if they really care, but
+# typical UI flows just don't display the warming banner unless
+# there's a pending ingest.
+import threading
+
+threading.Thread(target=_warmup_dense_sparse, daemon=True, name="embeddings-warmup").start()
+
 if PRELOAD_RERANKER:
     # Warm at boot when admins want reranking on the hot path.
-    _get_rerank()
+    # Same daemon-thread pattern so we don't block on the bigger
+    # cross-encoder download.
+    threading.Thread(target=_get_rerank, daemon=True, name="rerank-warmup").start()
 
 
 # ── Models ────────────────────────────────────────────────────────────

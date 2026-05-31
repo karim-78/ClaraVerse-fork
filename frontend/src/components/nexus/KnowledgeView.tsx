@@ -164,8 +164,17 @@ export function KnowledgeView() {
 
   const totalChunks = files.reduce((sum, f) => sum + (f.chunk_count ?? 0), 0);
   const readyCount = files.filter(f => f.status === 'ready').length;
+  // The sidecar warms its dense model in the background at boot now,
+  // but on a brand-new deploy it can take ~30-60s to download. Only
+  // show the warming banner when SOMETHING is actually waiting on
+  // it — files currently queued or ingesting. If the user is just
+  // looking at an idle project there's no point announcing the
+  // model is "warming" (it's lazy, not late).
+  const hasPending = files.some(
+    f => f.status === 'queued' || f.status === 'ingesting'
+  );
   const sidecarWarming =
-    health && health.available !== false && !health.dense_loaded;
+    health && health.available !== false && !health.dense_loaded && hasPending;
   const sidecarDown = health?.available === false;
 
   return (

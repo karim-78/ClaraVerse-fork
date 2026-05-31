@@ -7,6 +7,7 @@
 // + easier to add specialized retry/streaming later.
 
 import { api } from './api';
+import { authClient } from '@/lib/auth';
 
 export type KnowledgeFileStatus = 'queued' | 'ingesting' | 'ready' | 'failed';
 
@@ -79,14 +80,13 @@ export const knowledgeService = {
   uploadFile: async (projectId: string, file: File): Promise<KnowledgeFile> => {
     // Multipart needs the browser to set its own boundary, so we drop
     // down to fetch directly rather than going through the JSON-shaped
-    // api.post helper. Pulls the auth token from localStorage the same
-    // way the rest of the codebase does (see api.ts:getAuthToken).
+    // api.post helper. Pull the access token through the same auth
+    // client the rest of the app uses — the token lives under
+    // `access_token` in localStorage (NOT `auth_token`; that was my
+    // earlier guess and caused a 401 on every upload).
     const form = new FormData();
     form.append('file', file);
-    const token =
-      typeof window !== 'undefined'
-        ? (localStorage.getItem('auth_token') ?? sessionStorage.getItem('auth_token'))
-        : null;
+    const token = authClient.getAccessToken();
     const apiBase =
       (import.meta.env?.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '';
     const url = `${apiBase}${base(projectId)}/files`;
