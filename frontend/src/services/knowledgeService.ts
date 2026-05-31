@@ -53,9 +53,19 @@ export interface KnowledgeHealthInfo {
 const base = (projectId: string) => `/api/projects/${projectId}/knowledge`;
 
 export const knowledgeService = {
-  /** List all files in a project's knowledge base (newest first). */
+  /**
+   * List all files in a project's knowledge base (newest first).
+   *
+   * Coerces `files: null` → `[]`. Go serializes a nil slice as JSON
+   * `null`, so a brand-new project with no files comes back as
+   * `{"files": null}` rather than `{"files": []}`. Callers do
+   * `.reduce`, `.map`, `.length` on the result; the coercion saves
+   * every one of them from a defensive guard.
+   */
   listFiles: (projectId: string) =>
-    api.get<{ files: KnowledgeFile[] }>(`${base(projectId)}/files`).then(r => r.files),
+    api
+      .get<{ files: KnowledgeFile[] | null }>(`${base(projectId)}/files`)
+      .then(r => r.files ?? []),
 
   /**
    * Upload a file for ingestion. Returns the created file record
@@ -108,7 +118,9 @@ export const knowledgeService = {
    * If project_ids is omitted, the call is scoped to the URL's project.
    */
   search: (projectId: string, body: { query: string; top_k?: number; rerank?: boolean; project_ids?: string[] }) =>
-    api.post<{ hits: KnowledgeSearchHit[] }>(`${base(projectId)}/search`, body).then(r => r.hits),
+    api
+      .post<{ hits: KnowledgeSearchHit[] | null }>(`${base(projectId)}/search`, body)
+      .then(r => r.hits ?? []),
 
   /** Sidecar health (admin UI uses this to warn during cold start). */
   health: () => api.get<KnowledgeHealthInfo>('/api/knowledge/health'),

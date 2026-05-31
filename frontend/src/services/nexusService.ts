@@ -18,11 +18,19 @@ function buildQuery(params: Record<string, string | number | undefined>): string
   return '?' + entries.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
 }
 
+// Coerce JSON null → empty array. Go encodes a nil slice as `null`,
+// not `[]`, so every list endpoint can return null on first-time /
+// empty-state. Without this coercion every consumer would need its
+// own defensive guard before calling .map/.reduce/.filter.
+const asArray = <T,>(v: T[] | null | undefined): T[] => v ?? [];
+
 export const nexusService = {
   getSession: () => api.get<NexusSession>(`${BASE}/session`),
 
   listTasks: (params?: { status?: string; limit?: number; offset?: number; project_id?: string }) =>
-    api.get<NexusTask[]>(`${BASE}/tasks${buildQuery(params ?? {})}`),
+    api
+      .get<NexusTask[] | null>(`${BASE}/tasks${buildQuery(params ?? {})}`)
+      .then(asArray),
 
   getTask: (id: string) => api.get<NexusTask>(`${BASE}/tasks/${id}`),
 
@@ -41,18 +49,20 @@ export const nexusService = {
 
   deleteTask: (id: string) => api.delete<{ status: string }>(`${BASE}/tasks/${id}`),
 
-  listDaemons: () => api.get<Daemon[]>(`${BASE}/daemons`),
+  listDaemons: () => api.get<Daemon[] | null>(`${BASE}/daemons`).then(asArray),
 
   getDaemon: (id: string) => api.get<Daemon>(`${BASE}/daemons/${id}`),
 
   cancelDaemon: (id: string) => api.post<{ status: string }>(`${BASE}/daemons/${id}/cancel`, {}),
 
-  getPersona: () => api.get<PersonaFact[]>(`${BASE}/persona`),
+  getPersona: () => api.get<PersonaFact[] | null>(`${BASE}/persona`).then(asArray),
 
-  getEngrams: (limit = 20) => api.get<EngramEntry[]>(`${BASE}/engrams${buildQuery({ limit })}`),
+  getEngrams: (limit = 20) =>
+    api.get<EngramEntry[] | null>(`${BASE}/engrams${buildQuery({ limit })}`).then(asArray),
 
   // Daemon Templates
-  listDaemonTemplates: () => api.get<DaemonTemplate[]>(`${BASE}/daemon-templates`),
+  listDaemonTemplates: () =>
+    api.get<DaemonTemplate[] | null>(`${BASE}/daemon-templates`).then(asArray),
 
   createDaemonTemplate: (template: Partial<DaemonTemplate>) =>
     api.post<DaemonTemplate>(`${BASE}/daemon-templates`, template),
@@ -64,7 +74,8 @@ export const nexusService = {
     api.delete<{ status: string }>(`${BASE}/daemon-templates/${id}`),
 
   // Projects
-  listProjects: () => api.get<NexusProject[]>(`${BASE}/projects`),
+  listProjects: () =>
+    api.get<NexusProject[] | null>(`${BASE}/projects`).then(asArray),
 
   createProject: (data: Partial<NexusProject>) => api.post<NexusProject>(`${BASE}/projects`, data),
 
@@ -78,7 +89,9 @@ export const nexusService = {
 
   // Saves
   listSaves: (params?: { tag?: string; limit?: number; offset?: number }) =>
-    api.get<NexusSave[]>(`${BASE}/saves${buildQuery(params ?? {})}`),
+    api
+      .get<NexusSave[] | null>(`${BASE}/saves${buildQuery(params ?? {})}`)
+      .then(asArray),
 
   getSave: (id: string) => api.get<NexusSave>(`${BASE}/saves/${id}`),
 

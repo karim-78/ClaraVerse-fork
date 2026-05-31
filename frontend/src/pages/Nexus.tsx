@@ -186,7 +186,11 @@ export function Nexus() {
       .listDaemons()
       .then(daemons => {
         if (cancelled) return;
-        for (const d of daemons) addDaemon(d);
+        // Go's JSON encoder serializes a nil slice as `null`, not
+        // `[]`, so the array-typed response can come back as null
+        // when the user has no active daemons. Coerce defensively.
+        const list = Array.isArray(daemons) ? daemons : [];
+        for (const d of list) addDaemon(d);
       })
       .catch(err => {
         console.warn('[Nexus] active daemon rehydrate failed:', err);
