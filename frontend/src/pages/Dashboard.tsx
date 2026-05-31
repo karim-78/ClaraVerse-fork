@@ -10,7 +10,7 @@ const apps = [
     id: 'chat',
     icon: MessageSquare,
     title: 'Chat',
-    description: 'Talk with Dobby AI assistant',
+    description: 'Talk with ClaraVerse assistant',
     href: '/chat',
   },
   {

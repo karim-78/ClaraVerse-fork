@@ -561,7 +561,7 @@ func (s *SkillService) FetchCommunitySkills(ctx context.Context) ([]CommunitySki
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "DobbyAI/1.0")
+	req.Header.Set("User-Agent", "ClaraVerse/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

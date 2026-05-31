@@ -303,7 +303,7 @@ func fetchImageFromURL(urlStr string) ([]byte, string, string, error) {
 	}
 
 	// Set a reasonable User-Agent
-	req.Header.Set("User-Agent", "DobbyAI/1.0 (Image Analyzer)")
+	req.Header.Set("User-Agent", "ClaraVerse/1.0 (Image Analyzer)")
 
 	// Make request
 	resp, err := client.Do(req)

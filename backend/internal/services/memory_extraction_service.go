@@ -40,7 +40,7 @@ const (
 )
 
 // Memory extraction system prompt
-const MemoryExtractionSystemPrompt = `You are a memory extraction system for Dobby AI. Analyze this conversation and extract important information to remember about the user.
+const MemoryExtractionSystemPrompt = `You are a memory extraction system for ClaraVerse. Analyze this conversation and extract important information to remember about the user.
 
 WHAT TO EXTRACT:
 1. **Personal Information**: Name, location, occupation, family, age, background

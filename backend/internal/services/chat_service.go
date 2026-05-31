@@ -3394,10 +3394,10 @@ func (s *ChatService) GetSystemPrompt(userConn *models.UserConnection, includeAs
 	return temporalContext + defaultPrompt + memoryContext + appendix
 }
 
-// getDefaultSystemPrompt returns the DobbyAI-specific system prompt
+// getDefaultSystemPrompt returns the ClaraVerse-specific system prompt
 // Minimal prompt - models can see tool definitions directly in the API call
 func getDefaultSystemPrompt() string {
-	return `You are DobbyAI, a helpful and intelligent assistant.
+	return `You are ClaraVerse, a helpful and intelligent assistant.
 
 ## Response Style
 

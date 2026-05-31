@@ -194,9 +194,9 @@ export const AuthForm: React.FC<AuthFormProps> = ({
           </h2>
           <p>
             {mode === 'signin'
-              ? 'Sign in to continue to DobbyAI'
+              ? 'Sign in to continue to ClaraVerse'
               : mode === 'signup'
-                ? 'Sign up to get started with DobbyAI'
+                ? 'Sign up to get started with ClaraVerse'
                 : 'Enter your email to receive a password reset link'}
           </p>
         </div>

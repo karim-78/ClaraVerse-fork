@@ -272,7 +272,7 @@ export function NexusSidebar({
               Install &amp; run the companion:
               <code className={styles.bridgeSetupCode}>
                 curl -fsSL
-                https://gist.githubusercontent.com/dobbyai-space/87a840d4a462c2787ce958691fa267b4/raw/install.sh
+                https://gist.githubusercontent.com/claraverse-space/87a840d4a462c2787ce958691fa267b4/raw/install.sh
                 | bash
               </code>
             </div>

@@ -127,7 +127,7 @@ func (t *CredentialTester) testDiscord(ctx context.Context, data map[string]inte
 	}
 
 	payload := map[string]string{
-		"content": "🔗 **DobbyAI Test** - Webhook connection verified!",
+		"content": "🔗 **ClaraVerse Test** - Webhook connection verified!",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -168,7 +168,7 @@ func (t *CredentialTester) testSlack(ctx context.Context, data map[string]interf
 	}
 
 	payload := map[string]string{
-		"text": "🔗 *DobbyAI Test* - Webhook connection verified!",
+		"text": "🔗 *ClaraVerse Test* - Webhook connection verified!",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -219,7 +219,7 @@ func (t *CredentialTester) testTelegram(ctx context.Context, data map[string]int
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload := map[string]string{
 		"chat_id": chatID,
-		"text":    "🔗 DobbyAI Test - Bot connection verified!",
+		"text":    "🔗 ClaraVerse Test - Bot connection verified!",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -317,7 +317,7 @@ func (t *CredentialTester) testTeams(ctx context.Context, data map[string]interf
 	}
 
 	payload := map[string]string{
-		"text": "🔗 **DobbyAI Test** - Webhook connection verified!",
+		"text": "🔗 **ClaraVerse Test** - Webhook connection verified!",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -1079,7 +1079,7 @@ func (t *CredentialTester) testGoogleChat(ctx context.Context, data map[string]i
 
 	// Google Chat webhook payload format
 	payload := map[string]string{
-		"text": "🔗 *DobbyAI Test* - Webhook connection verified!",
+		"text": "🔗 *ClaraVerse Test* - Webhook connection verified!",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -1234,7 +1234,7 @@ func (t *CredentialTester) testCustomWebhook(ctx context.Context, data map[strin
 
 	payload := map[string]string{
 		"test":    "true",
-		"message": "DobbyAI webhook test",
+		"message": "ClaraVerse webhook test",
 	}
 	body, _ := json.Marshal(payload)
 

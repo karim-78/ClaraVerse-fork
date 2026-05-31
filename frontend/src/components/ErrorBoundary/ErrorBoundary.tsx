@@ -110,7 +110,7 @@ ${errorInfo?.componentStack || 'No component stack available'}
     const payload = {
       embeds: [
         {
-          title: '🚨 DobbyAI Error Report',
+          title: '🚨 ClaraVerse Error Report',
           color: 15158332, // Red color
           fields: [
             {
@@ -212,7 +212,7 @@ ${errorInfo?.componentStack || 'No component stack available'}
 
           {/* Privacy Note */}
           <p className={styles.privacyNote}>
-            Error reports are sent to DobbyAI's Discord and contain only technical error
+            Error reports are sent to ClaraVerse's Discord and contain only technical error
             information (error message, stack trace). No personal data or chat content is included.
           </p>
 

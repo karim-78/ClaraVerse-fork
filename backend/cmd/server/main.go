@@ -46,7 +46,7 @@ func main() {
 	// Initialize structured logging (JSON in production, text in dev)
 	logging.Init()
 
-	log.Println("🚀 Starting DobbyAI Server...")
+	log.Println("🚀 Starting ClaraVerse Server...")
 
 	// Load .env file (ignore error if file doesn't exist)
 	if err := godotenv.Load(); err != nil {
@@ -649,7 +649,7 @@ func main() {
 
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
-		AppName:        "DobbyAI v1.0",
+		AppName:        "ClaraVerse v1.0",
 		ReadTimeout:    900 * time.Second, // 15 minutes — local models (Ollama) can take 5+ min to cold start
 		WriteTimeout:   900 * time.Second, // 15 minutes — streaming responses from large local models
 		IdleTimeout:    900 * time.Second, // 15 minutes — keep connections alive during long inference
@@ -663,7 +663,7 @@ func main() {
 	app.Use(logger.New())
 
 	// Prometheus metrics middleware
-	prometheus := fiberprometheus.New("dobbyai")
+	prometheus := fiberprometheus.New("claraverse")
 	prometheus.RegisterAt(app, "/metrics")
 	app.Use(prometheus.Middleware)
 	log.Println("📊 Prometheus metrics endpoint enabled at /metrics")

@@ -1143,7 +1143,7 @@ func (h *AgentHandler) Ask(c *fiber.Ctx) error {
 	}
 
 	// Build system prompt
-	systemPrompt := fmt.Sprintf(`You are an AI assistant helping users understand their workflow agent in DobbyAI.
+	systemPrompt := fmt.Sprintf(`You are an AI assistant helping users understand their workflow agent in ClaraVerse.
 
 **Agent Name**: %s
 **Agent Description**: %s

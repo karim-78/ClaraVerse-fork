@@ -11,7 +11,7 @@ package execution
 // Bootstrap (in main.go on startup):
 //
 //   execution.InitTracing(execution.TracingConfig{
-//       ServiceName: "dobbyai-backend",
+//       ServiceName: "claraverse-backend",
 //       Endpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 //       Headers:     execution.ParseOTLPHeaders(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS")),
 //   })
@@ -47,7 +47,7 @@ import (
 
 // TracingConfig is the operator-facing config knob.
 type TracingConfig struct {
-	ServiceName    string            // e.g. "dobbyai-backend"
+	ServiceName    string            // e.g. "claraverse-backend"
 	ServiceVersion string            // e.g. "v1.2.3" (defaults to "dev")
 	Endpoint       string            // OTLP HTTP endpoint, e.g. "otel-collector:4318". Empty = stdout exporter.
 	Insecure       bool              // true for HTTP (collector inside docker net); false for HTTPS
@@ -77,7 +77,7 @@ func InitTracing(cfg TracingConfig) error {
 	}
 
 	if cfg.ServiceName == "" {
-		cfg.ServiceName = "dobbyai-backend"
+		cfg.ServiceName = "claraverse-backend"
 	}
 	if cfg.ServiceVersion == "" {
 		cfg.ServiceVersion = "dev"
@@ -300,7 +300,7 @@ func (noopSpan) AddLink(trace.Link)                          {}
 // the bootstrap path in main.go.
 func ApplyEnvDefaults() TracingConfig {
 	return TracingConfig{
-		ServiceName:    envOr("OTEL_SERVICE_NAME", "dobbyai-backend"),
+		ServiceName:    envOr("OTEL_SERVICE_NAME", "claraverse-backend"),
 		ServiceVersion: envOr("DOBBYAI_VERSION", "dev"),
 		Endpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		Insecure:       strings.ToLower(os.Getenv("OTEL_EXPORTER_OTLP_INSECURE")) == "true",

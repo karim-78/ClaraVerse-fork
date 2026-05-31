@@ -60,7 +60,7 @@ export const ResetPassword = () => {
       {/* Left side: Single image (60%) */}
       <div className="onboarding-left">
         <div className="onboarding-image-container">
-          <img src="/image-1.webp" alt="DobbyAI" className="onboarding-image" />
+          <img src="/image-1.webp" alt="ClaraVerse" className="onboarding-image" />
         </div>
       </div>
 

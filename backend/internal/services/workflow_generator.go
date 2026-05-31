@@ -131,7 +131,7 @@ func buildDynamicSystemPrompt(userMessage string) string {
 }
 
 // WorkflowSystemPromptBase is the base system prompt without tools section
-const WorkflowSystemPromptBase = `You are a Dobby AI workflow generator. Your ONLY job is to output valid JSON workflow definitions.
+const WorkflowSystemPromptBase = `You are a ClaraVerse workflow generator. Your ONLY job is to output valid JSON workflow definitions.
 
 CRITICAL: You must ONLY respond with a JSON object. No explanations, no markdown, no code blocks - JUST the JSON.
 

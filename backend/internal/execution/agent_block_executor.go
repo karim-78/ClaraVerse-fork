@@ -2084,7 +2084,7 @@ type LLMResponse struct {
 	OutputTokens int
 }
 
-// callLLM makes a streaming call to the LLM (required for DobbyAI API compatibility)
+// callLLM makes a streaming call to the LLM (required for ClaraVerse API compatibility)
 func (e *AgentBlockExecutor) callLLM(
 	ctx context.Context,
 	provider *models.Provider,
@@ -2119,12 +2119,12 @@ func (e *AgentBlockExecutor) callLLMWithSchema(
 	// OpenAI GPT-4o models and newer support json_schema response_format
 	supportsStructuredOutput := (isOpenAI || isOpenRouter) && outputSchema != nil && len(tools) == 0
 
-	// Build request body - use streaming for better compatibility with DobbyAI API
+	// Build request body - use streaming for better compatibility with ClaraVerse API
 	requestBody := map[string]interface{}{
 		"model":       modelID,
 		"messages":    messages,
 		"temperature": temperature,
-		"stream":      true, // Use streaming - DobbyAI API works better with streaming
+		"stream":      true, // Use streaming - ClaraVerse API works better with streaming
 	}
 
 	// Use correct token limit parameter based on provider

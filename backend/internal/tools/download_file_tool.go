@@ -108,7 +108,7 @@ func executeDownloadFile(args map[string]interface{}) (string, error) {
 	}
 
 	// Set a reasonable User-Agent
-	req.Header.Set("User-Agent", "DobbyAI/1.0 (File Downloader)")
+	req.Header.Set("User-Agent", "ClaraVerse/1.0 (File Downloader)")
 
 	// Make request
 	resp, err := client.Do(req)

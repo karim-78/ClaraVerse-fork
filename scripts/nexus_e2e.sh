@@ -38,7 +38,7 @@ MODE="${MODE:-}"
 
 if [[ -z "${AUTH_TOKEN:-}" ]]; then
   echo "❌ AUTH_TOKEN env var required. Get one from your browser devtools:" >&2
-  echo "   localStorage.getItem('auth_token') in the console while logged into DobbyAI" >&2
+  echo "   localStorage.getItem('auth_token') in the console while logged into ClaraVerse" >&2
   exit 3
 fi
 

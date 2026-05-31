@@ -51,7 +51,7 @@ type ToolPredictionResult struct {
 }
 
 // Tool prediction system prompt (adapted from WorkflowGeneratorV2)
-const ToolPredictionSystemPrompt = `You are a tool selection expert for Dobby AI chat system. Analyze the user's message and select the MINIMUM set of tools needed to respond effectively.
+const ToolPredictionSystemPrompt = `You are a tool selection expert for ClaraVerse chat system. Analyze the user's message and select the MINIMUM set of tools needed to respond effectively.
 
 CRITICAL RULES:
 - Select ONLY tools that are DIRECTLY needed for THIS specific request

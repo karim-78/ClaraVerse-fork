@@ -1,6 +1,6 @@
-# DobbyAI — Systems Reference
+# ClaraVerse — Systems Reference
 
-This document covers the **agentic + automation** subsystems that distinguish DobbyAI from a generic chat UI: Nexus multi-agent, the durable workflow engine, the embedding-based memory system, the tool registry + MCP routing layer, and the OTel-backed observability story.
+This document covers the **agentic + automation** subsystems that distinguish ClaraVerse from a generic chat UI: Nexus multi-agent, the durable workflow engine, the embedding-based memory system, the tool registry + MCP routing layer, and the OTel-backed observability story.
 
 For repo layout, build/run instructions, and the broader chat/auth/admin systems, see [ARCHITECTURE.md](ARCHITECTURE.md) and [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 

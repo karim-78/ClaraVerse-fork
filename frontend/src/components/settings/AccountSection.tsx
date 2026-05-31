@@ -63,7 +63,7 @@ export const AccountSection: React.FC<AccountSectionProps> = ({ onSave: _onSave 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `dobbyai-data-export-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `claraverse-data-export-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-E2B Code Executor Microservice for DobbyAI / ClaraVerse
+E2B Code Executor Microservice for ClaraVerse / ClaraVerse
 Provides REST API for executing Python code in E2B sandboxes.
 
 Sandboxes are pooled per conversation_id — the first call for a conv spins

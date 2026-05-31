@@ -35,7 +35,7 @@ async function deriveEncryptionKey(userId: string): Promise<CryptoKey> {
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: encoder.encode('dobbyai-salt'), // Fixed salt for consistency
+      salt: encoder.encode('claraverse-salt'), // Fixed salt for consistency
       iterations: 100000,
       hash: 'SHA-256',
     },

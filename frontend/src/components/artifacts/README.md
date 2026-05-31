@@ -6,7 +6,7 @@ A Claude-style artifact rendering system for HTML, SVG, and Mermaid diagrams wit
 
 - **Three Artifact Types**: HTML, SVG, and Mermaid diagrams
 - **Zoom & Pan**: Interactive controls for SVG and Mermaid with mouse/trackpad support
-- **Glassmorphism Design**: Matches DobbyAI's rose pink (#e91e63) accent theme
+- **Glassmorphism Design**: Matches ClaraVerse's rose pink (#e91e63) accent theme
 - **Resizable Split View**: Drag handle to adjust chat/artifact ratio (persisted to localStorage)
 - **Tab Navigation**: Handle multiple artifacts in a single message
 - **Download Support**: Export artifacts as .html, .svg, or .mermaid files
@@ -214,4 +214,4 @@ Easily add support for:
 
 ## License
 
-Part of DobbyAI-Scarlet project.
+Part of ClaraVerse-Scarlet project.

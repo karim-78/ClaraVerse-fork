@@ -15,7 +15,7 @@
 import { create } from 'zustand';
 
 // Secure key derivation using Web Crypto API
-const SALT = 'dobbyai-secure-v1';
+const SALT = 'claraverse-secure-v1';
 
 /**
  * Derives an encryption key from a password using PBKDF2
@@ -112,8 +112,8 @@ function getKeyDerivationPassword(): string {
 }
 
 // Storage key names
-const SESSION_STORAGE_KEY = 'dobbyai-secure-keys';
-const LOCAL_STORAGE_KEY = 'dobbyai-secure-keys-persist';
+const SESSION_STORAGE_KEY = 'claraverse-secure-keys';
+const LOCAL_STORAGE_KEY = 'claraverse-secure-keys-persist';
 
 export interface SecureKeyEntry {
   providerId: string;
@@ -152,7 +152,7 @@ export const useSecureKeyStore = create<SecureKeyState>()((set, get) => ({
       const key = await deriveKey(password);
 
       // Check localStorage first for persistence preference
-      const persistFlag = localStorage.getItem('dobbyai-persist-keys');
+      const persistFlag = localStorage.getItem('claraverse-persist-keys');
       const shouldPersist = persistFlag === 'true';
 
       // Load from appropriate storage
@@ -248,7 +248,7 @@ export const useSecureKeyStore = create<SecureKeyState>()((set, get) => ({
     const { decryptedKeys } = get();
 
     // Save preference
-    localStorage.setItem('dobbyai-persist-keys', String(persist));
+    localStorage.setItem('claraverse-persist-keys', String(persist));
 
     if (persist) {
       // Move from session to local storage

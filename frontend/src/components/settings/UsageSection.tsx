@@ -527,7 +527,7 @@ export const UsageSection: React.FC = () => {
                     </li>
                     <li className="flex items-start gap-2 text-xs">
                       <span className="text-gray-300/50 mt-0.5">•</span>
-                      <span>DobbyAI administrators cannot access your encrypted memories</span>
+                      <span>ClaraVerse administrators cannot access your encrypted memories</span>
                     </li>
                     <li className="flex items-start gap-2 text-xs">
                       <span className="text-gray-300/50 mt-0.5">•</span>

@@ -581,7 +581,7 @@ func supportsStrictJSONSchema(providerName, baseURL string) bool {
 		return true
 	}
 
-	// DobbyAI Cloud (private TEE) - Mixed results, use fallback for safety
+	// ClaraVerse Cloud (private TEE) - Mixed results, use fallback for safety
 	// ✅ 100% compliance: Kimi-K2-Thinking-TEE, MiMo-V2-Flash
 	// ❌ 0% compliance: GLM-4.7-TEE (accepts strict mode but returns invalid JSON)
 	// Decision: Use fallback mode to ensure consistency across all models

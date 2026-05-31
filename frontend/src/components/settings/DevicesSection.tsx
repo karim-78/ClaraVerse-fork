@@ -144,7 +144,7 @@ export const DevicesSection = () => {
           <h3>No devices connected</h3>
           <p>Use the MCP CLI to connect a device to your account.</p>
           <a
-            href="https://docs.dobbyai.ai/cli"
+            href="https://docs.claraverse.ai/cli"
             target="_blank"
             rel="noopener noreferrer"
             className={styles.docsLink}

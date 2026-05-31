@@ -167,12 +167,12 @@ func (h *BackupAdminHandler) Backup(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "gzip close failed"})
 	}
 
-	filename := fmt.Sprintf("dobbyai-backup-%s.json.gz", time.Now().UTC().Format("20060102-150405"))
+	filename := fmt.Sprintf("claraverse-backup-%s.json.gz", time.Now().UTC().Format("20060102-150405"))
 	c.Set("Content-Type", "application/gzip")
 	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	c.Set("X-DobbyAI-Snapshot-Schema", fmt.Sprintf("%d", snapshotSchemaVersion))
-	c.Set("X-DobbyAI-Snapshot-Collections", fmt.Sprintf("%d", snap.Metadata.Collections))
-	c.Set("X-DobbyAI-Snapshot-Documents", fmt.Sprintf("%d", snap.Metadata.Documents))
+	c.Set("X-ClaraVerse-Snapshot-Schema", fmt.Sprintf("%d", snapshotSchemaVersion))
+	c.Set("X-ClaraVerse-Snapshot-Collections", fmt.Sprintf("%d", snap.Metadata.Collections))
+	c.Set("X-ClaraVerse-Snapshot-Documents", fmt.Sprintf("%d", snap.Metadata.Documents))
 
 	log.Printf("✅ [ADMIN-BACKUP] %d collections, %d docs, %d KB gzipped",
 		snap.Metadata.Collections, snap.Metadata.Documents, gzBuf.Len()/1024)

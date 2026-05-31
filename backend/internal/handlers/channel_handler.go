@@ -1084,7 +1084,7 @@ func (h *ChannelHandler) handleTelegramCommand(ctx context.Context, channel *mod
 
 	switch command {
 	case "/start":
-		welcome := fmt.Sprintf("👋 Hello! I'm *%s*, your DobbyAI assistant.\n\n"+
+		welcome := fmt.Sprintf("👋 Hello! I'm *%s*, your ClaraVerse assistant.\n\n"+
 			"Just send me a message and I'll respond!\n\n"+
 			"*Commands:*\n"+
 			"/new - Start a new conversation\n"+
@@ -1717,7 +1717,7 @@ func truncateText(text string, maxLen int) string {
 var (
 	// Match common image generation service URLs
 	imageURLRegex = regexp.MustCompile(`https?://[^\s<>"\]]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s<>"\]]*)?`)
-	// Match secure file download URLs from DobbyAI
+	// Match secure file download URLs from ClaraVerse
 	secureFileRegex = regexp.MustCompile(`https?://[^\s<>"\]]+/api/secure-files/download/[a-zA-Z0-9-]+`)
 	// Match DALL-E, Flux, and other image service URLs
 	imageServiceRegex = regexp.MustCompile(`https?://(?:oaidalleapiprodscus\.blob\.core\.windows\.net|replicate\.delivery|cdn\.openai\.com|[^\s<>"\]]+\.r2\.cloudflarestorage\.com)[^\s<>"\]]*`)

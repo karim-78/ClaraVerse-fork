@@ -114,7 +114,7 @@ func kebabToTitleCase(s string) string {
 	return strings.Join(words, " ")
 }
 
-// SkillMDToSkill converts parsed SKILL.md data to a DobbyAI Skill.
+// SkillMDToSkill converts parsed SKILL.md data to a ClaraVerse Skill.
 func SkillMDToSkill(fm *SkillMDFrontmatter, body string) *models.Skill {
 	name := fm.Name
 	displayName := name
@@ -171,7 +171,7 @@ func SkillMDToSkill(fm *SkillMDFrontmatter, body string) *models.Skill {
 	}
 }
 
-// SkillToSkillMD converts a DobbyAI Skill to SKILL.md format.
+// SkillToSkillMD converts a ClaraVerse Skill to SKILL.md format.
 func SkillToSkillMD(skill *models.Skill) string {
 	var sb strings.Builder
 

@@ -1,7 +1,7 @@
 /**
  * Channel Service
  * Handles API calls for communication channels (Telegram, etc.)
- * Channels allow users to chat with DobbyAI from external platforms
+ * Channels allow users to chat with ClaraVerse from external platforms
  */
 
 import { api } from './api';

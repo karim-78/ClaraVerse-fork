@@ -21,15 +21,15 @@ interface AgentDocsPanelProps {
   hasFileInput?: boolean;
 }
 
-// Platform definitions for AI prompt generator - DobbyAI first as featured option
+// Platform definitions for AI prompt generator - ClaraVerse first as featured option
 const AI_PLATFORMS = [
   {
-    id: 'dobbyai',
-    name: 'DobbyAI',
-    // DobbyAI uses Sparkles icon (rendered inline, not favicon)
+    id: 'claraverse',
+    name: 'ClaraVerse',
+    // ClaraVerse uses Sparkles icon (rendered inline, not favicon)
     favicon: null,
     color: '#8B5CF6',
-    description: 'Build instantly with DobbyAI Chat',
+    description: 'Build instantly with ClaraVerse Chat',
     featured: true,
   },
   {
@@ -558,7 +558,7 @@ ${commonRequirements}
 
 Focus on creating a delightful user experience that makes the AI agent easy and enjoyable to use.`;
 
-      case 'dobbyai': {
+      case 'claraverse': {
         const apiKeyToUse = 'YOUR_API_KEY_HERE';
         const apiKeyNote = `**API Key:** Copy your API key from the **API Keys** tab and replace \`YOUR_API_KEY_HERE\` in the code below.`;
 
@@ -570,11 +570,11 @@ ${apiEndpoints}
 ${outputExample}
 ${commonRequirements}
 
-## IMPORTANT: Output Format for DobbyAI
+## IMPORTANT: Output Format for ClaraVerse
 
 **Please provide the complete HTML code in a single code block.** Use \`\`\`html to start the code block and include the entire file content so I can copy it easily.
 
-## Requirements for DobbyAI (Standalone HTML)
+## Requirements for ClaraVerse (Standalone HTML)
 
 Create a **single HTML file** that:
 - Uses Tailwind CSS via CDN (\`<script src="https://cdn.tailwindcss.com"></script>\`)
@@ -804,7 +804,7 @@ for (const [blockName, blockData] of Object.entries(output)) {
               >
                 {isCopied ? (
                   <Check size={platform.featured ? 18 : 16} className="text-green-400" />
-                ) : platform.id === 'dobbyai' ? (
+                ) : platform.id === 'claraverse' ? (
                   <Sparkles size={platform.featured ? 18 : 16} className="text-purple-500" />
                 ) : (
                   platform.favicon && (
@@ -849,7 +849,7 @@ for (const [blockName, blockData] of Object.entries(output)) {
               Prompt copied! Paste it into{' '}
               <strong>{AI_PLATFORMS.find(p => p.id === selectedPlatform)?.name}</strong> to generate
               a frontend for this agent.
-              {selectedPlatform !== 'dobbyai' && (
+              {selectedPlatform !== 'claraverse' && (
                 <span className="text-[var(--color-text-tertiary)]">
                   {' '}
                   Don't forget to add your API key from the <strong>API Keys</strong> tab.
@@ -859,18 +859,18 @@ for (const [blockName, blockData] of Object.entries(output)) {
           </div>
         )}
 
-        {/* DobbyAI special action - Generate Now button */}
-        {selectedPlatform === 'dobbyai' && (
+        {/* ClaraVerse special action - Generate Now button */}
+        {selectedPlatform === 'claraverse' && (
           <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
             <button
               onClick={() => {
-                const prompt = generatePrompt('dobbyai');
+                const prompt = generatePrompt('claraverse');
                 navigate(`/chat?prompt=${encodeURIComponent(prompt)}`);
               }}
               className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-all bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/50"
             >
               <ExternalLink size={16} />
-              Or Generate with DobbyAI Chat
+              Or Generate with ClaraVerse Chat
             </button>
           </div>
         )}

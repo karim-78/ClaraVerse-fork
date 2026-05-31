@@ -35,7 +35,7 @@ type MemorySelectionService struct {
 }
 
 // Memory selection system prompt
-const MemorySelectionSystemPrompt = `You are a memory selection system for Dobby AI. Given the user's recent conversation and their memory bank, select the MOST RELEVANT memories.
+const MemorySelectionSystemPrompt = `You are a memory selection system for ClaraVerse. Given the user's recent conversation and their memory bank, select the MOST RELEVANT memories.
 
 SELECTION CRITERIA:
 1. **Direct Relevance**: Memory directly relates to current conversation topic

@@ -130,7 +130,7 @@ export const BillingSection: React.FC<BillingSectionProps> = ({
   const handlePlanSelect = (plan: Plan) => {
     if (plan.contact_sales) {
       // Open contact form or email
-      window.open('mailto:support@dobbyai.app?subject=Enterprise%20Plan%20Inquiry', '_blank');
+      window.open('mailto:support@claraverse.app?subject=Enterprise%20Plan%20Inquiry', '_blank');
       return;
     }
 

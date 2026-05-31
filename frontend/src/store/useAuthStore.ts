@@ -137,7 +137,7 @@ export const useAuthStore = create<AuthState>()(
 
             // Note: With user-specific IndexedDB and cloud sync (MongoDB),
             // local backup/restore is no longer needed. Each user's data is:
-            // 1. Isolated in their own IndexedDB database (dobbyai-chats-{userId})
+            // 1. Isolated in their own IndexedDB database (claraverse-chats-{userId})
             // 2. Synced to cloud (MongoDB) if cloud mode is enabled
 
             // Set up automatic session refresh (every 30 minutes) - only once

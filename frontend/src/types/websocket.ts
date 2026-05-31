@@ -1,4 +1,4 @@
-// WebSocket message types for DobbyAI backend
+// WebSocket message types for ClaraVerse backend
 
 // Model types
 export interface Model {
