@@ -35,6 +35,11 @@ services:
       - REDIS_URL=redis://redis:6379
       - SEARXNG_URL=http://searxng:8080
       - SEARXNG_URLS=http://searxng:8080
+      # RAG (Qdrant vector DB + FastEmbed sidecar). Both are optional
+      # in the sense that the rest of the app works without them, but
+      # the Knowledge tab + search_knowledge tool need both wired.
+      - QDRANT_URL=http://qdrant:6333
+      - EMBEDDINGS_SERVICE_URL=http://embeddings:8002
       # Frontend serving (all-in-one mode)
       - SERVE_FRONTEND=true
       - FRONTEND_URL=http://localhost:${CLARAVERSE_PORT:-3000}
@@ -53,6 +58,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      # Note: NOT depending on `embeddings` — its first boot downloads
+      # ~140 MB of ONNX models which can take 30-60s. We don't want
+      # the backend wedged waiting. The RAG service gracefully reports
+      # "embeddings unavailable" until the sidecar warms up.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
@@ -117,6 +128,53 @@ services:
     networks:
       - claraverse
 
+  # Qdrant — vector DB backing the per-project Knowledge bases (RAG).
+  # One collection per project (kb_<project_oid>). Hybrid dense+sparse
+  # vectors with payload-filtered search. See docs/RAG.md.
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: claraverse-qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - claraverse
+
+  # Embeddings sidecar — FastAPI wrapper around FastEmbed (Qdrant Inc).
+  # Hosts the dense embedder (bge-small-en-v1.5, 384d), sparse BM25,
+  # and bge-reranker-base cross-encoder. First boot downloads ~140 MB
+  # of ONNX weights into a volume; subsequent restarts are fast.
+  embeddings:
+    image: ghcr.io/claraverse-space/claraverse-embeddings:${CLARAVERSE_TAG:-latest}
+    build:
+      context: ./backend/embeddings-service
+      dockerfile: Dockerfile
+    container_name: claraverse-embeddings
+    environment:
+      - EMBEDDINGS_DENSE_MODEL=${EMBEDDINGS_DENSE_MODEL:-BAAI/bge-small-en-v1.5}
+      - EMBEDDINGS_SPARSE_MODEL=${EMBEDDINGS_SPARSE_MODEL:-Qdrant/bm25}
+      - EMBEDDINGS_RERANK_MODEL=${EMBEDDINGS_RERANK_MODEL:-BAAI/bge-reranker-base}
+      - EMBEDDINGS_PRELOAD_RERANKER=${EMBEDDINGS_PRELOAD_RERANKER:-false}
+    volumes:
+      - embeddings-cache:/root/.cache/fastembed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health').read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s  # Cold start downloads model weights
+      retries: 3
+    networks:
+      - claraverse
+
   searxng:
     image: searxng/searxng:latest
     container_name: claraverse-searxng
@@ -158,6 +216,8 @@ volumes:
   mysql-data:
   redis-data:
   searxng-config:
+  qdrant-data:
+  embeddings-cache:
 
 networks:
   claraverse:

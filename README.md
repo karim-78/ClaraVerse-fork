@@ -60,7 +60,7 @@ docker run -d \
   ghcr.io/claraverse-space/claraverse:latest
 ```
 
-This runs ClaraVerse with a single container. For the full stack with MySQL, MongoDB, Redis, and SearXNG, use the Docker Compose setup above.
+This runs ClaraVerse with a single container. For the full stack with MySQL, MongoDB, Redis, SearXNG, **Qdrant + the embeddings sidecar (required for Knowledge bases / RAG)**, use the Docker Compose setup above — single-container mode boots fine but the Knowledge tab and `search_knowledge` tool need the sidecars and will surface "embeddings service unreachable" without them.
 
 </details>
 
@@ -205,6 +205,7 @@ Use workflows with your web apps, schedule daily messages, automate repetitive t
 | Feature                           | Description                                                                  |
 | --------------------------------- | ---------------------------------------------------------------------------- |
 | **Nexus**                   | Assign long-running tasks, track progress on a Kanban board                  |
+| **Knowledge bases**         | Upload PDFs / MD / TXT / HTML to a project, search via hybrid vector + BM25 + reranker. Available in Chat, Nexus daemons, and Workflows |
 | **Skills**                  | Context-aware tools that activate mid-conversation when needed               |
 | **Channels**                | Telegram integration — talk to Clara from your phone                        |
 | **Routines**                | Scheduled task sequences that report back via Telegram                       |
