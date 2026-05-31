@@ -89,6 +89,14 @@ const CHAT_FOOTER_LINKS: FooterLink[] = [
   { href: '/agents', label: 'Agents', icon: Bot, ariaLabel: 'Navigate to agents' },
 ];
 
+/**
+ * Stable empty-array sentinel for the chat-knowledge selector.
+ * Module-level constant so Zustand's selector returns the SAME
+ * reference every render when no projects are attached — otherwise a
+ * fresh [] each call triggers an infinite re-render loop.
+ */
+const KNOWLEDGE_EMPTY: readonly string[] = Object.freeze([]);
+
 export const Chat = () => {
   // URL parameters and navigation
   const { chatId } = useParams<{ chatId?: string }>();
@@ -308,11 +316,20 @@ export const Chat = () => {
   // tolerate failure silently — RAG is optional, a missing project
   // list just hides the picker rather than breaking chat.
   const [knowledgeProjects, setKnowledgeProjects] = useState<NexusProject[]>([]);
-  const knowledgeStoreGet = useChatKnowledgeStore(s => s.get);
   const knowledgeStoreSet = useChatKnowledgeStore(s => s.set);
   const knowledgeStorePromote = useChatKnowledgeStore(s => s.promoteDraft);
   const chatKnowledgeKey = chat?.id ?? null;
-  const knowledgeProjectIds = knowledgeStoreGet(chatKnowledgeKey);
+  // Subscribe to the DATA, not the get() method. Subscribing to
+  // s.get returned a stable function reference that never changed,
+  // so React never re-rendered when the picker toggled a project —
+  // the click wrote to the store but the chip row was frozen until
+  // a full page refresh. Reading from s.selections triggers a
+  // proper subscription. The `?? KNOWLEDGE_EMPTY` keeps the
+  // reference stable when no projects are attached (avoids an
+  // infinite render loop from a fresh [] every render).
+  const knowledgeProjectIds = useChatKnowledgeStore(
+    s => s.selections[chatKnowledgeKey ?? ''] ?? KNOWLEDGE_EMPTY
+  );
 
   useEffect(() => {
     let cancelled = false;
