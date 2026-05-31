@@ -338,7 +338,11 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 	// 6. Daemon execution loop
 	maxIter := r.instance.MaxIterations
 	if maxIter <= 0 {
-		maxIter = 25
+		// Default bumped to 40 (was 25) because we now force serial tool
+		// calls — every "go search and synthesize" task burns one
+		// iteration per tool call. 40 gives 2-3 search batches + a
+		// produce_artifact + a synthesis turn, with headroom.
+		maxIter = 40
 	}
 
 	for i := 0; i < maxIter; i++ {
@@ -356,6 +360,20 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 		progress := float64(i) / float64(maxIter)
 		r.updateStatus(models.DaemonStatusExecuting, fmt.Sprintf("Iteration %d/%d", i+1, maxIter), progress)
 
+		// Anti-loop nudge: if we're 5 iterations from the cap, append a
+		// reminder telling the model to finalize NOW. Without this the
+		// model often spends its remaining budget on more tool calls and
+		// runs out before it ever writes a summary — burning the whole
+		// orchestration with zero output to show for it.
+		if maxIter-i == 5 {
+			messages = append(messages, map[string]interface{}{
+				"role": "user",
+				"content": "You have 5 iterations left. STOP calling tools and write your final answer now. " +
+					"If this is a multi-daemon task, call produce_artifact with what you have, then write a summary. " +
+					"A partial answer is far better than running out of budget with nothing to show.",
+			})
+		}
+
 		// Proactive context trimming before LLM call
 		r.trimContextIfNeeded(messages)
 
@@ -371,7 +389,16 @@ func (r *DaemonRunner) Execute(ctx context.Context) {
 			return // Fatal error
 		}
 
-		// If tool calls, execute them
+		// If tool calls, execute them.
+		// First sanitize: the model occasionally returns a tool_call whose
+		// .function.arguments string is truncated mid-JSON (e.g.
+		// "{\"query\":\"most popular" with no closing quote). Echoing that
+		// back to the provider in the next request causes the provider to
+		// 400 with "Unterminated string at column 11". We pre-validate
+		// each tool_call's arguments and drop the broken ones — if the
+		// model gives us nothing usable this iteration, treat as no-op
+		// and let the loop reprompt.
+		toolCalls = filterValidToolCalls(toolCalls)
 		if len(toolCalls) > 0 {
 			// Add assistant message with tool calls to conversation
 			assistantMsg := map[string]interface{}{
@@ -521,6 +548,102 @@ func (r *DaemonRunner) adaptiveResultCap() int {
 		return 2500
 	default:
 		return 1500
+	}
+}
+
+// filterValidToolCalls drops any tool_call whose .function.arguments isn't
+// a valid JSON object. The model occasionally returns truncated arguments
+// (the stream cut off mid-string, the model went over its completion
+// budget, etc.). Echoing a broken arguments back to the provider in the
+// next turn triggers a 400 — the provider validates tool_call shapes on
+// re-receipt and the orphan unterminated string is fatal even on a tiny
+// request body.
+//
+// Behaviour: if EVERY tool_call is invalid, returns an empty slice. The
+// caller's "len(toolCalls) > 0" gate then treats this iteration like a
+// no-op text response, and the model gets a chance to retry on the next
+// loop iteration with a fresh prompt.
+func filterValidToolCalls(toolCalls []interface{}) []interface{} {
+	kept := toolCalls[:0]
+	for _, tc := range toolCalls {
+		tcm, ok := tc.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fn, ok := tcm["function"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		args, _ := fn["arguments"].(string)
+		// Empty arguments is a valid no-arg call shape; only filter when
+		// non-empty AND non-parseable.
+		if args == "" {
+			kept = append(kept, tc)
+			continue
+		}
+		var probe interface{}
+		if err := json.Unmarshal([]byte(args), &probe); err != nil {
+			log.Printf("[DAEMON] dropping tool_call with malformed arguments (len=%d): %v",
+				len(args), err)
+			continue
+		}
+		kept = append(kept, tc)
+	}
+	return kept
+}
+
+// sanitizeToolCallIDs rewrites tool_call_id values across the message
+// history into the opaque `call_<n>` form that every OpenAI-compatible
+// shim handles cleanly.
+//
+// Why this matters: some models (zai.glm-5 via Bedrock observed
+// 2026-05-31) emit ids like "functions.search_web:0" which include a `.`
+// and `:` — characters that downstream shims sometimes treat as path
+// separators or operators, producing opaque 400s. The spec says id is an
+// opaque string, so any stable mapping works. We mint deterministic
+// replacements per id so:
+//   - the same id in both the assistant.tool_calls entry and the
+//     subsequent tool.tool_call_id message gets the same replacement,
+//     preserving the pairing
+//   - re-running this on an already-sanitized history is a no-op (we
+//     skip ids that already match `call_` prefix)
+//
+// Mutates messages in place. Cheap: just walks every message once.
+func sanitizeToolCallIDs(messages []map[string]interface{}) {
+	mapping := map[string]string{}
+	rewrite := func(orig string) string {
+		if orig == "" {
+			return orig
+		}
+		if strings.HasPrefix(orig, "call_") {
+			// Already in the safe form — leave alone so we don't keep
+			// remapping across iterations and break previously-stored
+			// pairings.
+			return orig
+		}
+		if mapped, ok := mapping[orig]; ok {
+			return mapped
+		}
+		mapped := fmt.Sprintf("call_%x", len(mapping))
+		mapping[orig] = mapped
+		return mapped
+	}
+
+	for _, msg := range messages {
+		// assistant.tool_calls[*].id
+		if tcs, ok := msg["tool_calls"].([]interface{}); ok {
+			for _, tc := range tcs {
+				if tcm, ok := tc.(map[string]interface{}); ok {
+					if id, ok := tcm["id"].(string); ok {
+						tcm["id"] = rewrite(id)
+					}
+				}
+			}
+		}
+		// tool.tool_call_id
+		if id, ok := msg["tool_call_id"].(string); ok {
+			msg["tool_call_id"] = rewrite(id)
+		}
 	}
 }
 
@@ -823,6 +946,14 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 	// idempotent.
 	applyPromptCaching(messages, config.BaseURL)
 
+	// Sanitize tool_call_ids in the message history to a format Bedrock's
+	// /openai/v1 shim accepts. The model returns ids like "functions.X:N"
+	// which the shim then rejects when we echo them back in the tool-result
+	// message of the next iteration. Standard OpenAI format is opaque
+	// `call_<random>` — we generate stable replacements once per id so
+	// each tool result still pairs with its originating call.
+	sanitizeToolCallIDs(messages)
+
 	reqBody := map[string]interface{}{
 		"model":    config.Model,
 		"messages": messages,
@@ -830,6 +961,12 @@ func (r *DaemonRunner) callLLM(ctx context.Context, config *models.Config, messa
 	}
 	if len(availableTools) > 0 {
 		reqBody["tools"] = availableTools
+		// Force serial tool calls — Bedrock's /openai/v1 shim 400s on
+		// multi-tool-call assistant messages even after id sanitization
+		// (verified live 2026-05-31: re-enabling parallel calls broke
+		// the loop on iteration 2). Serial costs more iterations but
+		// is the only shape Bedrock reliably accepts.
+		reqBody["parallel_tool_calls"] = false
 	}
 
 	// Disable HTML-escaping for the request body. Go's default json.Marshal
