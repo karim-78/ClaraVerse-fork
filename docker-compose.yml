@@ -185,6 +185,12 @@ services:
       # RAG (Qdrant + embeddings sidecar)
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - EMBEDDINGS_SERVICE_URL=${EMBEDDINGS_SERVICE_URL:-http://embeddings:8002}
+      # Self-update via Watchtower sidecar (optional service in this
+      # compose — only add the `watchtower` service if you want
+      # one-click updates from the admin dashboard).
+      - WATCHTOWER_URL=${WATCHTOWER_URL:-http://watchtower:8080}
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_HTTP_API_TOKEN:-claraverse-watchtower-token}
+      - CLARAVERSE_VERSION=${CLARAVERSE_TAG:-dev}
     depends_on:
       mongodb:
         condition: service_healthy

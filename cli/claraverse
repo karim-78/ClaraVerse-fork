@@ -103,6 +103,11 @@ services:
   app:
     image: ghcr.io/claraverse-space/claraverse:latest
     container_name: claraverse
+    labels:
+      # Opt this container into Watchtower auto-updates. Sidecars
+      # below also carry this label so a `claraverse update` from
+      # the admin dashboard updates the whole stack atomically.
+      com.centurylinklabs.watchtower.enable: "true"
     ports:
       - "${CLARAVERSE_PORT:-3000}:3000"
     volumes:
@@ -121,6 +126,10 @@ services:
       # the Knowledge tool until they come back.
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDINGS_SERVICE_URL=http://embeddings:8002
+      # Self-update via Watchtower (sidecar defined below).
+      - WATCHTOWER_URL=http://watchtower:8080
+      - WATCHTOWER_HTTP_API_TOKEN=claraverse-watchtower-token
+      - CLARAVERSE_VERSION=latest
       - SERVE_FRONTEND=true
       - ALLOWED_ORIGINS=*
     depends_on:
@@ -196,6 +205,8 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.12.4
     container_name: claraverse-qdrant
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     volumes:
       - qdrant-data:/qdrant/storage
     environment:
@@ -208,6 +219,26 @@ services:
       start_period: 20s
       retries: 3
 
+  # Watchtower — powers the admin dashboard's "Update Available"
+  # banner + one-click update. Watches containers labeled with
+  # `com.centurylinklabs.watchtower.enable=true` and pulls + recreates
+  # them when newer images are published to ghcr.io. The HTTP API
+  # lets the backend trigger an immediate update on demand.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: claraverse-watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_HTTP_API_UPDATE=true
+      - WATCHTOWER_HTTP_API_PERIODIC_POLLS=true
+      - WATCHTOWER_HTTP_API_TOKEN=claraverse-watchtower-token
+      - WATCHTOWER_POLL_INTERVAL=3600
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+    restart: unless-stopped
+
   # FastEmbed sidecar — dense (bge-small-en-v1.5, 384d) + sparse
   # (BM25) + reranker (bge-reranker-base). First boot downloads
   # ~140 MB of ONNX weights into a volume; subsequent restarts are
@@ -216,6 +247,8 @@ services:
   embeddings:
     image: ghcr.io/claraverse-space/claraverse-embeddings:latest
     container_name: claraverse-embeddings
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     environment:
       - EMBEDDINGS_DENSE_MODEL=BAAI/bge-small-en-v1.5
       - EMBEDDINGS_SPARSE_MODEL=Qdrant/bm25
@@ -487,8 +520,8 @@ cmd_status() {
         return
     fi
 
-    # Show all container statuses (App + DBs + RAG sidecars)
-    local services=("claraverse:App" "claraverse-mysql:MySQL" "claraverse-mongodb:MongoDB" "claraverse-redis:Redis" "claraverse-searxng:SearXNG" "claraverse-qdrant:Qdrant" "claraverse-embeddings:Embed")
+    # Show all container statuses (App + DBs + RAG sidecars + auto-update)
+    local services=("claraverse:App" "claraverse-mysql:MySQL" "claraverse-mongodb:MongoDB" "claraverse-redis:Redis" "claraverse-searxng:SearXNG" "claraverse-qdrant:Qdrant" "claraverse-embeddings:Embed" "claraverse-watchtower:AutoUpd")
     for svc in "${services[@]}"; do
         local container="${svc%%:*}"
         local label="${svc##*:}"

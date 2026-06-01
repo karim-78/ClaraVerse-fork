@@ -1615,6 +1615,15 @@ func main() {
 			// Provider health dashboard
 			adminRoutes.Get("/health", adminHandler.GetHealthDashboard)
 
+			// Self-update — check GitHub for newer version, optionally
+			// trigger Watchtower to pull + recreate containers. Both
+			// admin-gated; apply only succeeds when Watchtower is wired
+			// (otherwise frontend falls back to manual `claraverse update`).
+			updatesHandler := handlers.NewUpdatesAdminHandler()
+			adminRoutes.Get("/updates/check", updatesHandler.Check)
+			adminRoutes.Post("/updates/apply", updatesHandler.Apply)
+			log.Println("✅ Admin self-update endpoints registered")
+
 			// Provider management (CRUD)
 			adminRoutes.Get("/providers", adminHandler.GetProviders)
 			adminRoutes.Post("/providers", adminHandler.CreateProvider)

@@ -21,6 +21,10 @@ services:
   claraverse:
     image: ghcr.io/claraverse-space/claraverse:${CLARAVERSE_TAG:-latest}
     container_name: claraverse
+    labels:
+      # Opt this container into Watchtower auto-updates. Without
+      # this label Watchtower ignores it.
+      com.centurylinklabs.watchtower.enable: "true"
     ports:
       - "${CLARAVERSE_PORT:-3000}:3000"
     volumes:
@@ -40,6 +44,14 @@ services:
       # the Knowledge tab + search_knowledge tool need both wired.
       - QDRANT_URL=http://qdrant:6333
       - EMBEDDINGS_SERVICE_URL=http://embeddings:8002
+      # Self-update (Watchtower). Backend calls Watchtower's HTTP API
+      # to apply updates on demand from the admin dashboard. Falls
+      # back to manual-update instructions when not set.
+      - WATCHTOWER_URL=http://watchtower:8080
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_HTTP_API_TOKEN:-claraverse-watchtower-token}
+      # Version baked into the runtime for the "update available"
+      # comparison. CI sets this on tagged builds.
+      - CLARAVERSE_VERSION=${CLARAVERSE_TAG:-latest}
       # Frontend serving (all-in-one mode)
       - SERVE_FRONTEND=true
       - FRONTEND_URL=http://localhost:${CLARAVERSE_PORT:-3000}
@@ -145,6 +157,32 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    networks:
+      - claraverse
+
+  # Watchtower — auto-update sidecar. Watches containers labeled
+  # `com.centurylinklabs.watchtower.enable=true` and pulls + recreates
+  # them when a newer image is published. We use:
+  #   - --label-enable: only update opted-in containers (NOT mysql/mongo)
+  #   - --http-api-update: expose /v1/update so the admin dashboard
+  #     can trigger an immediate one-click update from the UI
+  #   - --cleanup: remove old images after successful update
+  #   - --interval: how often to background-check (default 1h)
+  # Docker socket is mounted into Watchtower only (NOT the main app).
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: claraverse-watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_HTTP_API_UPDATE=true
+      - WATCHTOWER_HTTP_API_PERIODIC_POLLS=true
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_HTTP_API_TOKEN:-claraverse-watchtower-token}
+      - WATCHTOWER_POLL_INTERVAL=${WATCHTOWER_POLL_INTERVAL:-3600}
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+    restart: unless-stopped
     networks:
       - claraverse
 

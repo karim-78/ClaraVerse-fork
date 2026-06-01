@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useAdminStore } from '@/store/useAdminStore';
 import { Users, MessageSquare, Activity, Zap, Server, Box } from 'lucide-react';
+import { UpdateBanner } from './UpdateBanner';
 
 export const Dashboard = () => {
   const { overviewStats, isLoadingStats, fetchOverviewStats } = useAdminStore();
@@ -26,6 +27,11 @@ export const Dashboard = () => {
           Overview of system statistics and analytics
         </p>
       </div>
+
+      {/* Auto-update banner — renders only when an update is available
+          (or while applying / on error). Self-contained polling +
+          apply flow; no parent wiring needed. */}
+      <UpdateBanner />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
