@@ -163,10 +163,19 @@ func (h *UpdatesAdminHandler) Check(c *fiber.Ctx) error {
 	// If we ever hit v0.10 vs v0.2 this will sort wrong; revisit
 	// then with a real semver comparator. For now string compare
 	// catches the 99% case (current "v0.3.1" < latest "v0.3.2").
+	//
+	// Special-case the "rolling" identities — "dev" (local builds)
+	// and "latest" (the docker tag used by the CLI install). These
+	// don't carry a meaningful version, so claiming the user is
+	// out-of-date against a real release would be a false positive
+	// even when their image is byte-identical to the release.
 	latestTag := rel.TagName
+	isRolling := h.currentVersion == "dev" ||
+		h.currentVersion == "latest" ||
+		h.currentVersion == ""
 	updateAvailable := latestTag != "" &&
 		latestTag != h.currentVersion &&
-		h.currentVersion != "dev" && // dev builds: never claim out-of-date
+		!isRolling &&
 		!rel.Draft &&
 		!rel.Prerelease
 

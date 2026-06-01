@@ -92,26 +92,68 @@ export function UpdateBanner() {
   }, []);
 
   // ─ Reconnect poll ────────────────────────────────────────────
-  // Once Watchtower has recreated the backend, /api/admin/updates/check
-  // will succeed again. We poll every 3s until that happens, then
-  // hard-reload so the new frontend bundle takes effect.
+  // Watchtower may either: (a) actually pull a newer image and
+  // recreate the backend (request loop disconnects → reconnects
+  // with new version), OR (b) check images, find none newer, and
+  // do nothing (request loop stays connected, no version change).
+  //
+  // (a) is the happy update path. (b) is the "already up to
+  // date" case — common in dev where the running image is the
+  // tag's tip. We have to distinguish them or admins see the
+  // "still updating…" banner spin for 3 minutes when nothing
+  // ever happened.
+  //
+  // Strategy: capture the current version when we enter
+  // 'reconnecting', poll /check every 3s, and:
+  //   - if backend disconnects then reconnects with a DIFFERENT
+  //     version → real update happened → hard reload.
+  //   - if /check keeps returning the SAME version for ~9s
+  //     without any disconnect → Watchtower had nothing to do →
+  //     show "already up to date" and dismiss.
+  //   - if backend stays disconnected past the 3min ceiling →
+  //     real failure → error.
+  const versionAtApply = info?.current_version;
   useEffect(() => {
     if (phase !== 'reconnecting') return;
     let attempts = 0;
     const maxAttempts = 60; // 60 × 3s = 3 min ceiling
+    let sawDisconnect = false;
+    let stableSameVersionPolls = 0;
     const id = window.setInterval(async () => {
       attempts++;
       try {
         const r = await api.get<CheckResponse>('/api/admin/updates/check');
-        // Got a response — backend is up. Hard reload to pick up
-        // the new frontend bundle that the new container serves.
-        window.clearInterval(id);
-        setPhase('done');
-        setInfo(r);
-        // Brief delay so the user sees the "done" state before reload.
-        setTimeout(() => window.location.reload(), 1500);
+        if (sawDisconnect) {
+          // Backend came back from a real outage → recreated.
+          // Reload to pick up the new frontend bundle.
+          window.clearInterval(id);
+          setPhase('done');
+          setInfo(r);
+          setTimeout(() => window.location.reload(), 1500);
+          return;
+        }
+        // No disconnect yet. If we've been here for 3 polls (~9s)
+        // and the version hasn't changed, Watchtower had nothing
+        // to update. Treat as a no-op success.
+        if (r.current_version === versionAtApply) {
+          stableSameVersionPolls++;
+          if (stableSameVersionPolls >= 3) {
+            window.clearInterval(id);
+            setPhase('idle');
+            setInfo(r);
+            setError(null);
+          }
+        } else {
+          // Version changed without a disconnect (Watchtower can
+          // do this for some restart modes). Treat as update.
+          window.clearInterval(id);
+          setPhase('done');
+          setInfo(r);
+          setTimeout(() => window.location.reload(), 1500);
+        }
       } catch {
-        // Still restarting — keep polling.
+        // Connection failed → backend is restarting.
+        sawDisconnect = true;
         if (attempts >= maxAttempts) {
           window.clearInterval(id);
           setError(
@@ -122,7 +164,7 @@ export function UpdateBanner() {
       }
     }, 3000);
     return () => window.clearInterval(id);
-  }, [phase]);
+  }, [phase, versionAtApply]);
 
   // ─ Render ────────────────────────────────────────────────────
   // Hide the banner entirely when there's nothing to show. Errors
