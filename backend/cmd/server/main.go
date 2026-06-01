@@ -223,6 +223,15 @@ func main() {
 	settingsService.SetDB(db)
 	log.Println("✅ Settings service initialized")
 
+	// Wire the settings reader into the tools package so Composio /
+	// E2B integrations can resolve their keys from the DB-backed
+	// admin UI instead of just env vars. This is what enables the
+	// "edit and apply without restart" UX. Without this, keys saved
+	// via the admin panel would write to the DB but tools would keep
+	// reading the env var.
+	tools.SetSettingsBackend(settingsService)
+	log.Println("✅ Tools settings backend wired (Composio/E2B keys editable in admin)")
+
 	// Initialize execution limiter (requires TierService + Redis)
 	if tierService != nil && redisService != nil {
 		executionLimiter = middleware.NewExecutionLimiter(tierService, redisService.Client())
@@ -1623,6 +1632,17 @@ func main() {
 			adminRoutes.Get("/updates/check", updatesHandler.Check)
 			adminRoutes.Post("/updates/apply", updatesHandler.Apply)
 			log.Println("✅ Admin self-update endpoints registered")
+
+			// Integration credentials (Composio + E2B) — admin-editable
+			// keys backed by the settings table. Tools resolve through
+			// tools.GetComposioAPIKey / tools.GetE2BAPIKey which check
+			// the DB first then fall back to env. New values take effect
+			// within 30s (cache TTL) or immediately after PUT (cache
+			// invalidated). No restart required.
+			integrationsHandler := handlers.NewIntegrationsAdminHandler(settingsService)
+			adminRoutes.Get("/integration-settings", integrationsHandler.List)
+			adminRoutes.Put("/integration-settings", integrationsHandler.Update)
+			log.Println("✅ Admin integration-settings endpoints registered (Composio + E2B)")
 
 			// Provider management (CRUD)
 			adminRoutes.Get("/providers", adminHandler.GetProviders)

@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 )
@@ -140,7 +139,7 @@ func executeZoomCreateMeeting(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -230,7 +229,7 @@ func executeZoomListMeetings(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -300,7 +299,7 @@ func executeZoomGetMeeting(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -387,7 +386,7 @@ func executeZoomUpdateMeeting(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -465,7 +464,7 @@ func executeZoomDeleteMeeting(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -527,7 +526,7 @@ func executeZoomGetUser(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -604,7 +603,7 @@ func executeZoomAddRegistrant(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}

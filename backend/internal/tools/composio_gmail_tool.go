@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -144,7 +143,7 @@ func executeComposioGmailSend(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -248,7 +247,7 @@ func executeComposioGmailFetch(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -344,7 +343,7 @@ func executeComposioGmailGetMessage(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("'message_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -434,7 +433,7 @@ func executeComposioGmailReply(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("'thread_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -530,7 +529,7 @@ func executeComposioGmailCreateDraft(args map[string]interface{}) (string, error
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -618,7 +617,7 @@ func executeComposioGmailSendDraft(args map[string]interface{}) (string, error) 
 		return "", fmt.Errorf("'draft_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -687,7 +686,7 @@ func executeComposioGmailListDrafts(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -786,7 +785,7 @@ func executeComposioGmailAddLabel(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("'message_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -860,7 +859,7 @@ func executeComposioGmailListLabels(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -933,7 +932,7 @@ func executeComposioGmailTrash(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("'message_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}

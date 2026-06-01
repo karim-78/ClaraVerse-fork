@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 )
@@ -115,7 +114,7 @@ func executeTwitterPostTweet(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -185,7 +184,7 @@ func executeTwitterGetTimeline(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -257,7 +256,7 @@ func executeTwitterSearchTweets(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -327,7 +326,7 @@ func executeTwitterGetUser(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -431,7 +430,7 @@ func executeTwitterLikeTweet(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -497,7 +496,7 @@ func executeTwitterRetweet(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -563,7 +562,7 @@ func executeTwitterDeleteTweet(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}

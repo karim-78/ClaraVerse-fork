@@ -29,6 +29,7 @@ import {
   Traces,
   SystemModels,
   E2BSettings,
+  IntegrationSettings,
 } from '@/pages/admin';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -221,6 +222,7 @@ const router = createBrowserRouter([
           { path: 'models', element: <ModelManagement /> },
           { path: 'system-models', element: <SystemModels /> },
           { path: 'code-execution', element: <E2BSettings /> },
+          { path: 'integrations', element: <IntegrationSettings /> },
           { path: 'users', element: <UserManagement /> },
           { path: 'traces', element: <Traces /> },
           { path: '', element: <Navigate to="dashboard" replace /> },

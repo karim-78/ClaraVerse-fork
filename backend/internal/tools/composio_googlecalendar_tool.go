@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 )
@@ -148,7 +147,7 @@ func executeGoogleCalendarCreateEvent(args map[string]interface{}) (string, erro
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -258,7 +257,7 @@ func executeGoogleCalendarListEvents(args map[string]interface{}) (string, error
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -352,7 +351,7 @@ func executeGoogleCalendarFindFreeSlots(args map[string]interface{}) (string, er
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -430,7 +429,7 @@ func executeGoogleCalendarQuickAddEvent(args map[string]interface{}) (string, er
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -506,7 +505,7 @@ func executeGoogleCalendarDeleteEvent(args map[string]interface{}) (string, erro
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -583,7 +582,7 @@ func executeGoogleCalendarGetEvent(args map[string]interface{}) (string, error) 
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -685,7 +684,7 @@ func executeGoogleCalendarUpdateEvent(args map[string]interface{}) (string, erro
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -767,7 +766,7 @@ func executeGoogleCalendarListCalendars(args map[string]interface{}) (string, er
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}

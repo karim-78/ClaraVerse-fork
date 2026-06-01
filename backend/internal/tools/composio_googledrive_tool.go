@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 )
@@ -125,7 +124,7 @@ func executeGoogleDriveListFiles(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -201,7 +200,7 @@ func executeGoogleDriveGetFile(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -272,7 +271,7 @@ func executeGoogleDriveCreateFolder(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -352,7 +351,7 @@ func executeGoogleDriveSearchFiles(args map[string]interface{}) (string, error) 
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -424,7 +423,7 @@ func executeGoogleDriveDeleteFile(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -500,7 +499,7 @@ func executeGoogleDriveCopyFile(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -577,7 +576,7 @@ func executeGoogleDriveMoveFile(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -651,7 +650,7 @@ func executeGoogleDriveDownloadFile(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}

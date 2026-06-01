@@ -15,6 +15,7 @@ import {
   LogOut,
   ArrowLeft,
   Activity,
+  Puzzle,
 } from 'lucide-react';
 
 export const AdminLayout = () => {
@@ -34,6 +35,7 @@ export const AdminLayout = () => {
     { path: '/admin/models', label: 'Models', icon: Box },
     { path: '/admin/system-models', label: 'System Models', icon: Settings },
     { path: '/admin/code-execution', label: 'Code Execution', icon: Code },
+    { path: '/admin/integrations', label: 'Integrations', icon: Puzzle },
     { path: '/admin/users', label: 'Users', icon: Users },
     { path: '/admin/traces', label: 'Traces', icon: Activity },
   ];

@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -256,7 +255,7 @@ func executeComposioGoogleSheetsRead(args map[string]interface{}) (string, error
 	}
 
 	// Call Composio API
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -322,7 +321,7 @@ func executeComposioGoogleSheetsWrite(args map[string]interface{}) (string, erro
 	}
 
 	// Call Composio API
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -381,7 +380,7 @@ func executeComposioGoogleSheetsAppend(args map[string]interface{}) (string, err
 	}
 
 	// Call Composio API
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -542,7 +541,7 @@ func executeComposioGoogleSheetsCreate(args map[string]interface{}) (string, err
 	title, _ := args["title"].(string)
 
 	// Call Composio API
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -621,7 +620,7 @@ func executeComposioGoogleSheetsInfo(args map[string]interface{}) (string, error
 		return "", fmt.Errorf("'spreadsheet_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -696,7 +695,7 @@ func executeComposioGoogleSheetsListSheets(args map[string]interface{}) (string,
 		return "", fmt.Errorf("'spreadsheet_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -771,7 +770,7 @@ func executeComposioGoogleSheetsSearch(args map[string]interface{}) (string, err
 		return "", fmt.Errorf("composio_entity_id not found in credentials")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -865,7 +864,7 @@ func executeComposioGoogleSheetsClear(args map[string]interface{}) (string, erro
 		return "", fmt.Errorf("'range' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -945,7 +944,7 @@ func executeComposioGoogleSheetsAddSheet(args map[string]interface{}) (string, e
 		return "", fmt.Errorf("'spreadsheet_id' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -1048,7 +1047,7 @@ func executeComposioGoogleSheetsDeleteSheet(args map[string]interface{}) (string
 		return "", fmt.Errorf("'sheet_id' must be a number")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -1153,7 +1152,7 @@ func executeComposioGoogleSheetsFindReplace(args map[string]interface{}) (string
 		return "", fmt.Errorf("'replace' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}
@@ -1277,7 +1276,7 @@ func executeComposioGoogleSheetsUpsertRows(args map[string]interface{}) (string,
 		return "", fmt.Errorf("'rows' is required")
 	}
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return "", fmt.Errorf("COMPOSIO_API_KEY environment variable not set")
 	}

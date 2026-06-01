@@ -119,7 +119,22 @@ func GetE2BExecutorService() *E2BExecutorService {
 	return e2bExecutorServiceInstance
 }
 
-// getAPIKey returns the E2B API key from the provider or env var
+// getAPIKey returns the E2B API key.
+//
+// Resolution priority:
+//   1. apiKeyProvider callback (set by main.go to read from the
+//      DB-backed settings table — admin-editable, picked up
+//      without restart on the next tool call).
+//   2. E2B_API_KEY env var (backwards-compat for users who set
+//      it at compose-up time before the admin UI existed).
+//
+// Returns empty when not configured anywhere; callers should
+// surface "configure in admin → integrations" error.
+//
+// Why a callback instead of importing the settings package directly:
+// the tools package imports e2b (for the api_tester_tool that
+// shells out to the runner). Adding `e2b → tools` would create
+// an import cycle. The callback is the standard inversion.
 func (s *E2BExecutorService) getAPIKey() string {
 	if s.apiKeyProvider != nil {
 		if key := s.apiKeyProvider(); key != "" {

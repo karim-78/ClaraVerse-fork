@@ -5,6 +5,7 @@ import (
 	"claraverse/internal/models"
 	"claraverse/internal/security"
 	"claraverse/internal/services"
+	"claraverse/internal/tools"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,7 +52,7 @@ func NewComposioAuthHandler(credentialService *services.CredentialService) *Comp
 func (h *ComposioAuthHandler) InitiateGoogleSheetsAuth(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := tools.GetComposioAPIKey()
 	if composioAPIKey == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_API_KEY not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -90,7 +91,7 @@ func (h *ComposioAuthHandler) InitiateGoogleSheetsAuth(c *fiber.Ctx) error {
 
 	// Get auth config ID from environment
 	// This must be created in Composio dashboard first
-	authConfigID := os.Getenv("COMPOSIO_GOOGLESHEETS_AUTH_CONFIG_ID")
+	authConfigID := tools.GetComposioAuthConfigID("googlesheets")
 	if authConfigID == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_GOOGLESHEETS_AUTH_CONFIG_ID not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -270,7 +271,7 @@ func (h *ComposioAuthHandler) GetConnectedAccount(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	entityID := userID // We use user ID as entity ID
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := tools.GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Composio integration not configured",
@@ -366,7 +367,7 @@ func (h *ComposioAuthHandler) CompleteComposioSetup(c *fiber.Ctx) error {
 	entityID := userID
 
 	// Verify the connection exists in Composio
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := tools.GetComposioAPIKey()
 	if composioAPIKey == "" {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Composio integration not configured",
@@ -443,7 +444,7 @@ func (h *ComposioAuthHandler) CompleteComposioSetup(c *fiber.Ctx) error {
 func (h *ComposioAuthHandler) InitiateGmailAuth(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := tools.GetComposioAPIKey()
 	if composioAPIKey == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_API_KEY not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -481,7 +482,7 @@ func (h *ComposioAuthHandler) InitiateGmailAuth(c *fiber.Ctx) error {
 	}
 
 	// Get auth config ID from environment
-	authConfigID := os.Getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID")
+	authConfigID := tools.GetComposioAuthConfigID("gmail")
 	if authConfigID == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_GMAIL_AUTH_CONFIG_ID not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -589,7 +590,7 @@ func (h *ComposioAuthHandler) InitiateGmailAuth(c *fiber.Ctx) error {
 func (h *ComposioAuthHandler) InitiateLinkedInAuth(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := tools.GetComposioAPIKey()
 	if composioAPIKey == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_API_KEY not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -627,7 +628,7 @@ func (h *ComposioAuthHandler) InitiateLinkedInAuth(c *fiber.Ctx) error {
 	}
 
 	// Get auth config ID from environment
-	authConfigID := os.Getenv("COMPOSIO_LINKEDIN_AUTH_CONFIG_ID")
+	authConfigID := tools.GetComposioAuthConfigID("linkedin")
 	if authConfigID == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_LINKEDIN_AUTH_CONFIG_ID not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -734,7 +735,7 @@ func (h *ComposioAuthHandler) InitiateLinkedInAuth(c *fiber.Ctx) error {
 func (h *ComposioAuthHandler) initiateComposioOAuth(c *fiber.Ctx, serviceName, envVarName, serviceSlug string) error {
 	userID := c.Locals("user_id").(string)
 
-	composioAPIKey := os.Getenv("COMPOSIO_API_KEY")
+	composioAPIKey := tools.GetComposioAPIKey()
 	if composioAPIKey == "" {
 		log.Printf("❌ [COMPOSIO] COMPOSIO_API_KEY not set")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
