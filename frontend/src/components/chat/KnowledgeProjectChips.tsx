@@ -224,13 +224,21 @@ const popoverStyle: React.CSSProperties = {
   position: 'absolute',
   bottom: 'calc(100% + 6px)',
   left: 8,
-  zIndex: 1000,
+  // Stack above the centered-mode greeting overlay (which sits at
+  // z-index ~50 from CommandCenter). 9999 is overkill on purpose —
+  // any future floating element below this should still lose.
+  zIndex: 9999,
   width: 280,
   maxHeight: 320,
-  background: 'var(--color-surface-elevated, #1a1a1a)',
+  // SOLID background. The original `var(--color-surface-elevated)`
+  // is rgba(255,255,255,0.05) in the dark theme — mostly
+  // transparent, so the greeting text bled through the popover.
+  // The solid color matches the chat input panel's elevated look
+  // without relying on translucency.
+  background: '#181818',
   border: '1px solid var(--color-border)',
   borderRadius: 10,
-  boxShadow: 'var(--shadow-glow-md, 0 10px 30px rgba(0,0,0,0.4))',
+  boxShadow: '0 16px 48px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.5)',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
