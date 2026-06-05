@@ -121,7 +121,7 @@ export function DeployPanel({ isOpen, onClose }: DeployPanelProps) {
   const webhookMethod = webhookConfig?.method || 'POST';
 
   // Computed values
-  const baseApiUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+  const baseApiUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
   // Build webhook URL from the slug returned by backend + frontend's base URL
   const webhookEndpoint = webhookInfo?.path ? `${baseApiUrl}/api/wh/${webhookInfo.path}` : '';
   const endpoint = `${baseApiUrl}/api/trigger/${currentAgent?.id || 'xxx'}`;

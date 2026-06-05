@@ -31,7 +31,7 @@ You can use any HTML/CSS - inline styles, flexbox/grid layouts, custom fonts, co
 - Add 'page-break-inside: avoid' to prevent elements from being split across pages
 - Use 'page-break-after: always' to force a new page after an element
 - Tables, images, and code blocks should have 'page-break-inside: avoid' to prevent awkward cuts
-- Example: <div style="page-break-inside: avoid;">Content that stays together</div>`,
+- Example: <div style="page-break-inside: avoid;">Content that stays together</div>` + ReportStyleGuide,
 		Icon:        "FileText",
 		Parameters: map[string]interface{}{
 			"type": "object",
@@ -87,6 +87,10 @@ func executeCreateDocument(args map[string]interface{}) (string, error) {
 	delete(args, "__conversation_id__")
 
 	log.Printf("📄 [DOCUMENT-TOOL] Generating custom HTML document: %s (user: %s, length: %d chars)", filename, userID, len(htmlContent))
+
+	// Inject the margin-safe / break-safe Migi base stylesheet (the renderer
+	// uses zero page margins, so this prevents edge-to-edge + split content).
+	htmlContent = injectReportBaseCSS(htmlContent)
 
 	// Get document service to generate PDF
 	documentService := document.GetService()

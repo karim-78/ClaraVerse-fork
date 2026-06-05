@@ -335,6 +335,35 @@ func (s *ModelManagementService) FetchModelsFromProvider(ctx context.Context, pr
 		return 0, fmt.Errorf("failed to get provider: %w", err)
 	}
 
+	// Bedrock's OpenAI-compatible shim ("Mantle") does NOT expose a
+	// /v1/models listing — a GET there 404s with <UnknownOperationException/>.
+	// Probe the curated catalog instead (POST /chat/completions per candidate)
+	// and store whatever this key/region can actually invoke. Same logic the
+	// legacy ModelService.FetchFromProvider path uses; both live in this pkg.
+	if isBedrockProvider(provider.BaseURL) {
+		discovered, err := probeBedrockOpenAIShim(provider.APIKey, provider.BaseURL)
+		if err != nil {
+			return 0, fmt.Errorf("bedrock probe failed: %w", err)
+		}
+		count := 0
+		for _, id := range discovered {
+			if _, err := s.db.Exec(`
+				INSERT INTO models (id, provider_id, name, display_name, is_visible, fetched_at)
+				VALUES (?, ?, ?, ?, 0, ?)
+				ON DUPLICATE KEY UPDATE
+					name = VALUES(name),
+					display_name = VALUES(display_name),
+					fetched_at = VALUES(fetched_at)
+			`, id, providerID, id, id, time.Now()); err != nil {
+				log.Printf("⚠️  [MODEL-MGMT] Failed to store bedrock model %s: %v", id, err)
+			} else {
+				count++
+			}
+		}
+		log.Printf("✅ [MODEL-MGMT] Bedrock probe stored %d of %d catalog models for provider %d", count, len(discovered), providerID)
+		return count, nil
+	}
+
 	// Create HTTP request to provider's /v1/models endpoint
 	req, err := http.NewRequest("GET", provider.BaseURL+"/models", nil)
 	if err != nil {
@@ -454,7 +483,7 @@ func (s *ModelManagementService) TestModelConnection(ctx context.Context, modelI
 
 	// Update database
 	_, err = s.db.Exec(`
-		REPLACE INTO model_capabilities (model_id, provider_id, connection_test_passed, last_tested)
+		REPLACE INTO model_capabilities (model_id, provider_id, connection_test_passed, tested_at)
 		VALUES (?, ?, 1, ?)
 	`, modelID, model.ProviderID, time.Now())
 

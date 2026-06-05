@@ -22,7 +22,8 @@ export type RetryType =
   | 'add_details'
   | 'more_concise'
   | 'no_search'
-  | 'think_longer';
+  | 'think_longer'
+  | 'error_recover';
 
 export interface Message {
   id: string;

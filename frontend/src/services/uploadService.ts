@@ -5,7 +5,7 @@ import type {
   DataAttachment,
   DataPreview,
 } from '@/types/websocket';
-import { useAuthStore } from '@/store/useAuthStore';
+import { authClient } from '@/lib/auth';
 import { storeImage } from './imageCache';
 import { getApiBaseUrl } from '@/lib/config';
 
@@ -38,10 +38,39 @@ export class UploadError extends Error {
 }
 
 /**
- * Get authentication token from Zustand auth store
+ * Get authentication token (same source as the main API client).
  */
 function getAuthToken(): string | null {
-  return useAuthStore.getState().getAccessToken();
+  return authClient.getAccessToken();
+}
+
+/**
+ * fetch() that attaches the current bearer token and — like the main API
+ * client — transparently refreshes the access token once on a 401 and retries.
+ * Without this, an expired 15-min access token made uploads fail with
+ * "Authentication required" until a hard refresh re-initialized auth.
+ */
+async function authedFetch(url: string, init: RequestInit): Promise<Response> {
+  const build = (token: string | null): RequestInit => ({
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // NOTE: never set Content-Type here — the browser sets the multipart boundary.
+    },
+    credentials: 'include', // send the refresh-token cookie
+  });
+
+  let response = await fetch(url, build(getAuthToken()));
+  if (response.status === 401) {
+    try {
+      await authClient.refreshToken();
+      response = await fetch(url, build(getAuthToken()));
+    } catch {
+      // fall through and return the original 401
+    }
+  }
+  return response;
 }
 
 /**
@@ -113,16 +142,9 @@ export async function uploadFile(file: File, conversationId: string): Promise<Up
   formData.append('file', file);
   formData.append('conversation_id', conversationId);
 
-  // Get auth token
-  const token = getAuthToken();
-
   try {
-    const response = await fetch(`${API_BASE_URL}/api/upload`, {
+    const response = await authedFetch(`${API_BASE_URL}/api/upload`, {
       method: 'POST',
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        // DO NOT set Content-Type - browser sets it with boundary
-      },
       body: formData,
     });
 
@@ -324,14 +346,9 @@ export interface FileStatusResponse {
  * @returns File status information
  */
 export async function checkFileStatus(fileId: string): Promise<FileStatusResponse> {
-  const token = getAuthToken();
-
   try {
-    const response = await fetch(`${API_BASE_URL}/api/upload/${fileId}/status`, {
+    const response = await authedFetch(`${API_BASE_URL}/api/upload/${fileId}/status`, {
       method: 'GET',
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
     });
 
     if (!response.ok) {

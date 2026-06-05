@@ -91,7 +91,7 @@ export function AgentDocsPanel({
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<PlatformId | null>(null);
 
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
   // Generate platform-specific prompts
   const generatePrompt = (platformId: PlatformId): string => {

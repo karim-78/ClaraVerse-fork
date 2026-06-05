@@ -11,6 +11,18 @@ import (
 	"claraverse/internal/e2b"
 )
 
+// migiLoadCall builds a call to the injected migi_load() helper (see
+// DataLoaderBootstrap), which robustly loads CSV/Excel/JSON/Parquet — handling
+// multi-sheet workbooks (auto-picks the richest sheet, or a named one) and CSV
+// encoding/delimiter detection. Replaces the old hardcoded pd.read_csv() which
+// blew up with UnicodeDecodeError on .xlsx files.
+func migiLoadCall(filename, sheet string) string {
+	if sheet != "" {
+		return fmt.Sprintf("migi_load(%q, sheet=%q)", filename, sheet)
+	}
+	return fmt.Sprintf("migi_load(%q)", filename)
+}
+
 // stripDataLoadingCalls removes pd.read_csv(), pd.read_excel(), pd.read_json() calls from user code
 // This prevents LLMs from trying to load files by filename (which don't exist in the sandbox)
 func stripDataLoadingCalls(code string) string {
@@ -72,7 +84,7 @@ Chart types you can create:
 - Histogram: sns.histplot(df['col'], bins=30)
 - Box: sns.boxplot(data=df, x='category', y='value')
 
-Always use plt.show() after each plot. Add titles and labels for clarity.`,
+Always use plt.show() after each plot. Add titles and labels for clarity.` + ChartStyleGuide + DataColumnsGuide,
 		Icon:     "ChartBar",
 		Source:   ToolSourceBuiltin,
 		Category: "computation",
@@ -116,6 +128,10 @@ Always end with plt.show()`,
 						"type": "string",
 					},
 				},
+				"sheet_name": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional (Excel only): which sheet to load. If omitted on a multi-sheet workbook, the richest sheet is auto-selected. Call read_spreadsheet first to see sheet names.",
+				},
 			},
 		},
 		Execute: executeDataAnalyst,
@@ -147,6 +163,13 @@ func executeDataAnalyst(args map[string]interface{}) (string, error) {
 		filename: csvData,
 	}
 
+	// Optional sheet selection for multi-sheet Excel workbooks.
+	sheet := ""
+	if sn, ok := args["sheet_name"].(string); ok {
+		sheet = sn
+	}
+	loadCall := migiLoadCall(filename, sheet)
+
 	var pythonCode string
 
 	// Check for custom python_code first (LLM-generated visualizations)
@@ -160,12 +183,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Set plot style
-plt.style.use('seaborn-v0_8-darkgrid')
-sns.set_palette("husl")
+# Apply Migi chart style (crisp 150-DPI, accent palette, despined)
+migi_chart_style()
 
 # Load data
-df = pd.read_csv('%s')
+df = %s
 
 print("=" * 80)
 print("DATA ANALYSIS")
@@ -181,7 +203,7 @@ print()
 print("\n" + "=" * 80)
 print("✅ ANALYSIS COMPLETE")
 print("=" * 80)
-`, filename, filename, cleanedCode)
+`, loadCall, filename, cleanedCode)
 	} else {
 		// Fallback to predefined analysis types
 		analysisType := "summary"
@@ -196,8 +218,11 @@ print("=" * 80)
 			}
 		}
 
-		pythonCode = generateDataAnalysisCode([]string{filename}, analysisType, columns)
+		pythonCode = generateDataAnalysisCode(loadCall, filename, analysisType, columns)
 	}
+
+	// Inject the robust loader so migi_load() is defined in the sandbox.
+	pythonCode = DataLoaderBootstrap + "\n" + pythonCode
 
 	// Execute code with longer timeout for custom visualizations
 	e2bService := e2b.GetE2BExecutorService()
@@ -212,16 +237,24 @@ print("=" * 80)
 			errorMsg = *result.Error
 		}
 
+		// Surface the actual schema (migi_load prints [schema] columns/dtypes at
+		// the top of stdout) so the model fixes wrong/guessed column names with
+		// the REAL ones instead of looping.
+		schemaHint := ""
+		if s := firstChars(result.Stdout, 1800); strings.TrimSpace(s) != "" {
+			schemaHint = "\n\n📋 Use the EXACT column names from the loaded data (and col(df,'name') if unsure):\n" + s
+		}
+
 		// Check for FileNotFoundError and provide helpful message
 		if strings.Contains(errorMsg, "FileNotFoundError") || strings.Contains(errorMsg, "No such file or directory") {
 			return "", fmt.Errorf(`analysis failed: %s
 
 💡 HINT: The data is already pre-loaded as 'df' (pandas DataFrame).
 Do NOT use pd.read_csv(), pd.read_excel(), or pd.read_json() - those files don't exist in the sandbox!
-Just use 'df' directly in your code. Example: sns.barplot(data=df, x='category', y='sales')`, errorMsg)
+Just use 'df' directly in your code. Example: sns.barplot(data=df, x='category', y='sales')%s`, errorMsg, schemaHint)
 		}
 
-		return "", fmt.Errorf("analysis failed: %s", errorMsg)
+		return "", fmt.Errorf("analysis failed: %s%s", errorMsg, schemaHint)
 	}
 
 	// Format response
@@ -237,10 +270,7 @@ Just use 'df' directly in your code. Example: sns.barplot(data=df, x='category',
 	return string(jsonResponse), nil
 }
 
-func generateDataAnalysisCode(fileNames []string, analysisType string, columns []string) string {
-	// Determine the primary file
-	primaryFile := fileNames[0]
-
+func generateDataAnalysisCode(loadCall, displayName string, analysisType string, columns []string) string {
 	// Column filter
 	colFilter := ""
 	if len(columns) > 0 {
@@ -254,12 +284,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-# Set plot style
-plt.style.use('seaborn-v0_8-darkgrid')
-sns.set_palette("husl")
+# Apply Migi chart style (crisp 150-DPI, accent palette, despined)
+migi_chart_style()
 
 # Load data
-df = pd.read_csv('%s')%s
+df = %s%s
 
 print("=" * 80)
 print("DATA ANALYSIS REPORT")
@@ -267,7 +296,7 @@ print("=" * 80)
 print(f"\nDataset: %s")
 print(f"Shape: {df.shape[0]} rows × {df.shape[1]} columns")
 print()
-`, primaryFile, colFilter, primaryFile)
+`, loadCall, colFilter, displayName)
 
 	switch analysisType {
 	case "summary":

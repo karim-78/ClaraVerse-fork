@@ -12,7 +12,7 @@ export function ApiTriggerExample({ agentId, hasFileInput = false }: ApiTriggerE
   const [expanded, setExpanded] = useState(false);
 
   // Use the backend API URL, not the frontend URL
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
   // Upload file (API key needs "upload" scope) - only for file-based agents
   // Uses /api/external/upload which has open CORS for external access

@@ -957,11 +957,12 @@ func callComposioGmailAPI(apiKey string, entityID string, action string, payload
 		return "", fmt.Errorf("failed to get connected account: %w", err)
 	}
 
-	url := "https://backend.composio.dev/api/v2/actions/" + action + "/execute"
+	url := "https://backend.composio.dev/api/v3/tools/execute/" + action
 
 	v2Payload := map[string]interface{}{
-		"connectedAccountId": connectedAccountID,
-		"input":              payload["input"],
+		"connected_account_id": connectedAccountID,
+		"user_id":              entityID,
+		"arguments":            payload["input"],
 	}
 
 	jsonData, err := json.Marshal(v2Payload)
@@ -1070,7 +1071,7 @@ func getGmailConnectedAccountID(apiKey string, userID string, appName string) (s
 			// v2 execution endpoint needs the old UUID, not the new nano ID
 			// Check if deprecated.uuid exists (for v2 compatibility)
 			if account.Deprecated.UUID != "" {
-				return account.Deprecated.UUID, nil
+				return account.ID, nil
 			}
 			// Fall back to nano ID if UUID not available
 			return account.ID, nil

@@ -420,3 +420,16 @@
     padding: var(--space-3);
   }
 }
+
+/* GFM task lists ( - [ ] / - [x] ) — drop the bullet and style the checkbox */
+.markdown-renderer li.task-list-item {
+  list-style: none;
+  margin-left: -1.25em;
+}
+.markdown-renderer li.task-list-item input[type='checkbox'] {
+  margin-right: 0.5em;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.1em;
+  accent-color: var(--color-accent, #87c82a);
+}

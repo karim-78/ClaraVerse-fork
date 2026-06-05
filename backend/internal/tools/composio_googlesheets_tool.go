@@ -1356,7 +1356,7 @@ func getConnectedAccountID(apiKey string, userID string, appName string) (string
 			// v2 execution endpoint needs the old UUID, not the new nano ID
 			// Check if deprecated.uuid exists (for v2 compatibility)
 			if account.Deprecated.UUID != "" {
-				return account.Deprecated.UUID, nil
+				return account.ID, nil
 			}
 			// Fall back to nano ID if UUID not available
 			return account.ID, nil
@@ -1369,7 +1369,7 @@ func getConnectedAccountID(apiKey string, userID string, appName string) (string
 // callComposioAPI makes a request to Composio's v3 API
 func callComposioAPI(apiKey string, action string, payload map[string]interface{}) (string, error) {
 	// v2 execution endpoint still works with v3 connected accounts
-	url := "https://backend.composio.dev/api/v2/actions/" + action + "/execute"
+	url := "https://backend.composio.dev/api/v3/tools/execute/" + action
 
 	// Get params from payload
 	entityID, _ := payload["entityId"].(string)
@@ -1384,8 +1384,9 @@ func callComposioAPI(apiKey string, action string, payload map[string]interface{
 
 	// Build v2 payload (v2 execution endpoint uses connectedAccountId with camelCase)
 	v2Payload := map[string]interface{}{
-		"connectedAccountId": connectedAccountID,
-		"input":              input,
+		"connected_account_id": connectedAccountID,
+		"user_id":              entityID,
+		"arguments":            input,
 	}
 
 	jsonData, err := json.Marshal(v2Payload)

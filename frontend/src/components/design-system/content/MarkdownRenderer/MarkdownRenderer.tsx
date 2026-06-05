@@ -2,11 +2,14 @@ import { forwardRef, memo, useState, useEffect, useRef, useMemo, useCallback } f
 import type { HTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { ArrowUpRight, ZoomIn } from 'lucide-react';
 import { CodeBlock } from '../CodeBlock';
 import { cleanLLMOutput, cleanLLMOutputLight } from '@/utils';
 import { ImageGalleryModal, type GalleryImage } from '@/components/chat/ImageGalleryModal';
 import './MarkdownRenderer.css';
+import 'katex/dist/katex.min.css';
 import { getApiBaseUrl } from '@/lib/config';
 
 const API_BASE_URL = getApiBaseUrl();
@@ -301,7 +304,8 @@ const MarkdownRendererComponent = forwardRef<HTMLDivElement, MarkdownRendererPro
       <>
         <div ref={ref} className={`markdown-renderer ${className}`} {...props}>
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
             components={{
               code(props) {
                 const { className, children, ...codeProps } = props;

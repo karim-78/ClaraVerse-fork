@@ -674,11 +674,12 @@ func callComposioDriveAPI(apiKey string, entityID string, action string, input m
 		return "", fmt.Errorf("failed to get connected account: %w", err)
 	}
 
-	apiURL := "https://backend.composio.dev/api/v2/actions/" + action + "/execute"
+	apiURL := "https://backend.composio.dev/api/v3/tools/execute/" + action
 
 	v2Payload := map[string]interface{}{
-		"connectedAccountId": connectedAccountID,
-		"input":              input,
+		"connected_account_id": connectedAccountID,
+		"user_id":              entityID,
+		"arguments":            input,
 	}
 
 	jsonData, err := json.Marshal(v2Payload)
@@ -767,7 +768,7 @@ func getDriveConnectedAccountID(apiKey string, userID string, appName string) (s
 	for _, account := range response.Items {
 		if account.Toolkit.Slug == appName {
 			if account.Deprecated.UUID != "" {
-				return account.Deprecated.UUID, nil
+				return account.ID, nil
 			}
 			return account.ID, nil
 		}

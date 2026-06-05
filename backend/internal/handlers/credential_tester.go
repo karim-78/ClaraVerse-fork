@@ -1774,10 +1774,10 @@ func (t *CredentialTester) testComposioIntegration(
 
 	// Step 2: If a test action is provided, execute it to verify the integration actually works
 	if testAction != "" {
-		actionURL := "https://backend.composio.dev/api/v2/actions/" + testAction + "/execute"
+		actionURL := "https://backend.composio.dev/api/v3/tools/execute/" + testAction
 		payload := map[string]interface{}{
-			"connectedAccountId": connectedAccountID,
-			"input":              map[string]interface{}{},
+			"user_id":   entityID,
+			"arguments": map[string]interface{}{},
 		}
 		jsonData, err := json.Marshal(payload)
 		if err != nil {

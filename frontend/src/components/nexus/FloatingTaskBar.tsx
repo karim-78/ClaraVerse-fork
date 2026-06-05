@@ -476,7 +476,7 @@ export const FloatingTaskBar = memo(function FloatingTaskBar({
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.webm');
 
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
       const response = await fetch(`${apiBaseUrl}/api/audio/transcribe`, {
         method: 'POST',
         body: formData,

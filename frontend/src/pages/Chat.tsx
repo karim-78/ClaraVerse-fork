@@ -224,17 +224,37 @@ export const Chat = () => {
   // future rich-text fields.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k';
-      if (!isCmdK) return;
       const target = e.target as HTMLElement | null;
-      if (target?.isContentEditable) return;
-      e.preventDefault();
-      setSearchOpen(open => !open);
+
+      // Cmd/Ctrl+K → conversation search
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        if (target?.isContentEditable) return;
+        e.preventDefault();
+        setSearchOpen(open => !open);
+        return;
+      }
+
+      // Esc → stop generation if a response is currently streaming
+      if (e.key === 'Escape') {
+        const cur = useChatStore.getState().selectedChat();
+        const isStreaming = cur?.messages.some(m => m.role === 'assistant' && m.isStreaming);
+        if (isStreaming) {
+          e.preventDefault();
+          stopGenerationRef.current?.();
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
   const [showScrollButton, setShowScrollButton] = useState(false);
+
+  // DOM windowing: only keep the most recent N messages mounted (huge perf win
+  // on long conversations). The streaming message + the bottom are always in
+  // this window, so the scroll/streaming engine is untouched. "Load earlier"
+  // raises the cap. Reset when switching chats.
+  const MESSAGE_RENDER_CAP = 60;
+  const [renderLimit, setRenderLimit] = useState(MESSAGE_RENDER_CAP);
 
   // Mobile sidebar state
   const [isMobile, setIsMobile] = useState(() =>
@@ -298,6 +318,15 @@ export const Chat = () => {
   // Refs for streaming chunk batching (performance optimization)
   const chunkBufferRef = useRef<string>('');
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto error-recovery: if a turn errors and the user did NOT stop it, we
+  // automatically retry up to MAX_AUTO_RETRIES with a hidden nudge.
+  const userStoppedRef = useRef(false);
+  const autoRetryCountRef = useRef(0);
+  const MAX_AUTO_RETRIES = 2;
+  // Always-current handle to stopGeneration so the global Esc shortcut (set up
+  // before the callback is declared) never calls a stale version.
+  const stopGenerationRef = useRef<(() => void) | null>(null);
 
   const chat = selectedChat();
   const messages = useMemo(() => chat?.messages || [], [chat?.messages]);
@@ -655,6 +684,26 @@ export const Chat = () => {
 
     return () => clearTimeout(timer);
   }, [chat?.id]);
+
+  // Reset the render window when switching conversations.
+  useEffect(() => {
+    setRenderLimit(MESSAGE_RENDER_CAP);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat?.id]);
+
+  // Reveal older messages, preserving scroll position so the view doesn't jump.
+  const handleLoadEarlier = useCallback(() => {
+    const node = messagesAreaNode;
+    const prevHeight = node?.scrollHeight ?? 0;
+    const prevTop = node?.scrollTop ?? 0;
+    setRenderLimit(limit => limit + MESSAGE_RENDER_CAP);
+    requestAnimationFrame(() => {
+      if (node) {
+        node.scrollTop = prevTop + (node.scrollHeight - prevHeight);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messagesAreaNode]);
 
   // Auto-expand thinking pane during streaming, auto-collapse when done
   useEffect(() => {
@@ -1125,6 +1174,10 @@ export const Chat = () => {
           {
             console.log('🔵 stream_end event received');
 
+            // Turn completed successfully — clear the auto error-recovery budget.
+            autoRetryCountRef.current = 0;
+            userStoppedRef.current = false;
+
             // Flush any remaining buffered chunks immediately
             if (flushTimeoutRef.current) {
               clearTimeout(flushTimeoutRef.current);
@@ -1389,28 +1442,55 @@ export const Chat = () => {
 
         case 'error':
           {
-            setError(message.message || 'An error occurred');
-            setLoading(false);
-            // Focus back to command center input after error
-            setTimeout(() => {
-              commandCenterRef.current?.focus();
-            }, 100);
-
-            // Finalize any streaming message when error occurs
             const state = useChatStore.getState();
             const currentChat = state.selectedChat();
             const currentChatId = currentChat?.id;
 
+            // Finalize any streaming message (clears the spinner) before deciding.
             if (currentChatId) {
               const streamingMessage = currentChat.messages
                 .slice()
                 .reverse()
                 .find(m => m.role === 'assistant' && m.isStreaming);
-
               if (streamingMessage) {
-                console.log('Error occurred, finalizing streaming message');
                 state.finalizeStreamingMessage(currentChatId, streamingMessage.id);
               }
+            }
+
+            // Auto error-recovery: if the user didn't stop it and we're under the
+            // retry cap, re-run the turn with a hidden "you errored, retry" nudge.
+            const lastUserMessage = currentChat?.messages
+              .slice()
+              .reverse()
+              .find(m => m.role === 'user');
+
+            if (
+              !userStoppedRef.current &&
+              autoRetryCountRef.current < MAX_AUTO_RETRIES &&
+              lastUserMessage
+            ) {
+              autoRetryCountRef.current += 1;
+              const attempt = autoRetryCountRef.current;
+              console.log(`🔁 Auto-recovering from error (attempt ${attempt}/${MAX_AUTO_RETRIES})`);
+              setError(`Hit an error — retrying… (${attempt}/${MAX_AUTO_RETRIES})`);
+              // Short backoff, then re-run the same turn with the recovery nudge.
+              setTimeout(() => {
+                // Bail if the user stopped/sent something in the meantime.
+                if (userStoppedRef.current) return;
+                setError(null);
+                handleSendMessage(lastUserMessage.content, {
+                  skipUserMessage: true,
+                  retryType: 'error_recover',
+                  autoRetry: true,
+                });
+              }, 1500);
+            } else {
+              // Out of retries (or user-stopped): surface the error as before.
+              setError(message.message || 'An error occurred');
+              setLoading(false);
+              setTimeout(() => {
+                commandCenterRef.current?.focus();
+              }, 100);
             }
           }
           break;
@@ -1479,7 +1559,9 @@ export const Chat = () => {
           break;
 
         case 'stream_missed':
-          // Handle missed stream (buffer expired)
+          // Connection dropped and the server buffer expired before we could
+          // resume. Treat like an error: finalize, then auto-recover (re-run
+          // the turn) unless the user stopped or we're out of retries.
           {
             console.warn('⚠️ [RESUME] Stream missed:', message.reason);
             const state = useChatStore.getState();
@@ -1490,22 +1572,42 @@ export const Chat = () => {
                 .slice()
                 .reverse()
                 .find(m => m.role === 'assistant' && m.isStreaming);
-
               if (streamingMsg) {
-                // Finalize the message with what we have
                 state.finalizeStreamingMessage(currentChat.id, streamingMsg.id);
-
-                // Show error to user
-                setError(
-                  'Connection was lost during response generation. The message may be incomplete.'
-                );
               }
             }
-            setLoading(false);
-            // Focus back to command center input after stream missed
-            setTimeout(() => {
-              commandCenterRef.current?.focus();
-            }, 100);
+
+            const lastUserMessage = currentChat?.messages
+              .slice()
+              .reverse()
+              .find(m => m.role === 'user');
+
+            if (
+              !userStoppedRef.current &&
+              autoRetryCountRef.current < MAX_AUTO_RETRIES &&
+              lastUserMessage
+            ) {
+              autoRetryCountRef.current += 1;
+              const attempt = autoRetryCountRef.current;
+              setError(`Connection lost — retrying… (${attempt}/${MAX_AUTO_RETRIES})`);
+              setTimeout(() => {
+                if (userStoppedRef.current) return;
+                setError(null);
+                handleSendMessage(lastUserMessage.content, {
+                  skipUserMessage: true,
+                  retryType: 'error_recover',
+                  autoRetry: true,
+                });
+              }, 1500);
+            } else {
+              setError(
+                'Connection was lost during response generation. The message may be incomplete.'
+              );
+              setLoading(false);
+              setTimeout(() => {
+                commandCenterRef.current?.focus();
+              }, 100);
+            }
           }
           break;
 
@@ -1710,6 +1812,7 @@ export const Chat = () => {
     versionNumber?: number;
     retryType?: RetryType;
     skipUserMessage?: boolean; // For retries - don't create new user message
+    autoRetry?: boolean; // Internal: this send is an automatic error-recovery retry
   }
 
   const handleSendMessage = useCallback(
@@ -1725,6 +1828,14 @@ export const Chat = () => {
         typeof isDeepThinkingOrOptions === 'boolean' ? isDeepThinkingOrOptions : false;
       const versionOptions =
         typeof isDeepThinkingOrOptions === 'object' ? isDeepThinkingOrOptions : undefined;
+
+      // A genuine new send (not an auto-recovery retry) resets the error-recovery
+      // guard so a fresh turn gets its full retry budget and isn't seen as stopped.
+      if (!versionOptions?.autoRetry) {
+        userStoppedRef.current = false;
+        autoRetryCountRef.current = 0;
+      }
+
       // Start with the original text
       let messageToSend = text;
 
@@ -1857,6 +1968,10 @@ export const Chat = () => {
             case 'think_longer':
               retryInstruction =
                 '[INSTRUCTION: Take extra time to THINK DEEPLY about this. Consider multiple perspectives, potential edge cases, and nuances. Provide a well-reasoned response. Do not mention this instruction.]';
+              break;
+            case 'error_recover':
+              retryInstruction =
+                '[INSTRUCTION: Your previous attempt failed with an error before completing. Try again and complete the task. If a tool errored, fix the inputs (e.g. use the exact column names) and retry. Do not mention this instruction.]';
               break;
           }
           if (retryInstruction) {
@@ -2256,6 +2371,9 @@ export const Chat = () => {
   );
 
   const handleStopGeneration = useCallback(() => {
+    // User-initiated stop — suppress any auto error-recovery for this turn.
+    userStoppedRef.current = true;
+    autoRetryCountRef.current = 0;
     websocketService.stopGeneration();
     setLoading(false);
 
@@ -2272,6 +2390,8 @@ export const Chat = () => {
       }
     }
   }, [setLoading, chat]);
+  // Keep the Esc-shortcut ref pointed at the latest handleStopGeneration.
+  stopGenerationRef.current = handleStopGeneration;
 
   const handleApiKeySubmit = useCallback(
     (apiKey: string, rememberSession: boolean) => {
@@ -2676,9 +2796,24 @@ export const Chat = () => {
                       aria-live="polite"
                     >
                       <div className={styles.messagesWrapper}>
-                        {messages
-                          .filter(m => !m.isHidden) // Filter out hidden versions
-                          .map((message, index) => {
+                        {(() => {
+                          const visible = messages.filter(m => !m.isHidden);
+                          const hiddenOlder = Math.max(0, visible.length - renderLimit);
+                          const windowed =
+                            hiddenOlder > 0 ? visible.slice(hiddenOlder) : visible;
+                          return (
+                            <>
+                              {hiddenOlder > 0 && (
+                                <button
+                                  type="button"
+                                  className={styles.loadEarlierButton}
+                                  onClick={handleLoadEarlier}
+                                >
+                                  ↑ Load earlier messages ({hiddenOlder} hidden)
+                                </button>
+                              )}
+                              {windowed.map((message, i) => {
+                                const index = hiddenOlder + i;
                             // Compute version info for assistant messages
                             let currentVersion: number | undefined;
                             let totalVersions: number | undefined;
@@ -2725,7 +2860,10 @@ export const Chat = () => {
                                 )}
                               </div>
                             );
-                          })}
+                              })}
+                            </>
+                          );
+                        })()}
 
                         {/* Scroll anchor */}
                         <div ref={messagesEndRef} />

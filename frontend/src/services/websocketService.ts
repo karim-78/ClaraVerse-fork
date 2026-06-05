@@ -36,6 +36,11 @@ class WebSocketService {
   private streamingConversationId: string | null = null;
   private resumeTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  // Outgoing send queue — messages submitted while the socket is down are
+  // held here and flushed on reconnect so a network blip never loses a send.
+  private pendingSends: string[] = [];
+  private readonly MAX_PENDING_SENDS = 20;
+
   // Heartbeat support - keeps connection alive through proxies
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private lastPongTime: number = Date.now();
@@ -190,11 +195,6 @@ class WebSocketService {
      */
     knowledgeProjectIds?: string[]
   ): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error('WebSocket not connected');
-      return;
-    }
-
     this.conversationId = conversationId;
 
     const message: ChatMessagePayload = {
@@ -235,7 +235,32 @@ class WebSocketService {
       hasCustomConfig: !!customConfig,
       disableTools: !!disableTools,
     });
-    this.ws.send(JSON.stringify(message));
+    this.queueOrSend(JSON.stringify(message));
+  }
+
+  /**
+   * Send now if the socket is open; otherwise queue the payload and ensure a
+   * reconnect is in flight. The queue is flushed in onopen, so a transient
+   * disconnect never loses the user's message.
+   */
+  private queueOrSend(payload: string): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(payload);
+      return;
+    }
+    console.warn('⚠️ WebSocket not open — queuing message for reconnect');
+    if (this.pendingSends.length < this.MAX_PENDING_SENDS) {
+      this.pendingSends.push(payload);
+    }
+    this.ensureConnected();
+  }
+
+  /** Kick off a reconnect if the socket is missing or fully closed. */
+  private ensureConnected(): void {
+    const rs = this.ws?.readyState;
+    if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return;
+    const token = this.tokenGetter ? this.tokenGetter() : this.authToken;
+    this.connect(token);
   }
 
   /**
@@ -477,6 +502,21 @@ class WebSocketService {
 
       // Start heartbeat to keep connection alive through proxies
       this.startHeartbeat();
+
+      // Flush any sends that were queued while the socket was down so a
+      // transient drop never loses the user's message.
+      if (this.pendingSends.length > 0) {
+        console.log(`📤 [QUEUE] Flushing ${this.pendingSends.length} queued message(s)`);
+        const queued = this.pendingSends;
+        this.pendingSends = [];
+        for (const payload of queued) {
+          try {
+            this.ws?.send(payload);
+          } catch (err) {
+            console.error('❌ [QUEUE] Failed to flush queued message:', err);
+          }
+        }
+      }
 
       // Check if we were streaming and need to resume
       if (this.streamingConversationId) {

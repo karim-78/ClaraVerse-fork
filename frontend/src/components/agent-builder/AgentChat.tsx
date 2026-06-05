@@ -688,8 +688,8 @@ export function AgentChat({ className, onOpenSidebar, onCloseSidebar }: AgentCha
           currentAgent && workflow && workflow.blocks.length > 0
             ? generateDeploymentCode({
                 language: 'curl',
-                triggerUrl: `http://localhost:3001/api/trigger/${selectedAgentId}`,
-                statusUrl: `http://localhost:3001/api/trigger/status/:executionId`,
+                triggerUrl: `${window.location.origin}/api/trigger/${selectedAgentId}`,
+                statusUrl: `${window.location.origin}/api/trigger/status/:executionId`,
                 apiKey: 'YOUR_API_KEY',
                 agentId: selectedAgentId,
                 startBlockConfig: workflow.blocks.find(b => b.type === 'variable')?.config || null,
@@ -907,7 +907,7 @@ export function AgentChat({ className, onOpenSidebar, onCloseSidebar }: AgentCha
         formData.append('file', audioBlob, 'recording.webm');
 
         // Upload to backend transcription endpoint
-        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
         const response = await fetch(`${apiBaseUrl}/api/audio/transcribe`, {
           method: 'POST',
           body: formData,

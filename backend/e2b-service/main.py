@@ -267,8 +267,17 @@ def _collect_logs(execution) -> tuple[str, str, Optional[str]]:
 def _collect_plots_and_texts(execution) -> tuple[List[PlotResult], List[str]]:
     plots: List[PlotResult] = []
     texts: List[str] = []
+    # The Jupyter inline backend emits the SAME figure twice — once for the
+    # explicit plt.show() and once when it auto-flushes open figures at cell end
+    # — so dedupe identical PNGs to avoid double charts.
+    seen_png: set = set()
     for i, result in enumerate(execution.results):
         if hasattr(result, "png") and result.png:
+            sig = hash(result.png)
+            if sig in seen_png:
+                logger.info("Skipped duplicate plot %d", i)
+                continue
+            seen_png.add(sig)
             plots.append(PlotResult(format="png", data=result.png))
             logger.info("Found plot %d", i)
         elif hasattr(result, "text") and result.text:

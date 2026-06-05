@@ -367,7 +367,7 @@ export function AgentAPIKeysPanel({ agentId, className }: AgentAPIKeysPanelProps
       {keys.length > 0 &&
         (() => {
           const curlCommand = `curl -X POST \\
-  ${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/trigger/${agentId} \\
+  ${import.meta.env.VITE_API_BASE_URL || window.location.origin}/api/trigger/${agentId} \\
   -H "X-API-Key: YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"input": {"message": "Hello"}}'`;

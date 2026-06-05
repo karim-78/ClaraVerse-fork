@@ -3,6 +3,7 @@ package e2b
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -325,6 +326,41 @@ func (s *E2BExecutorService) ExecuteWithFiles(ctx context.Context, code string, 
 }
 
 // ExecuteAdvanced runs Python code with dependencies and retrieves output files
+// PushFile writes a file into the pooled sandbox for a conversation at
+// targetPath (e.g. "/data/sales.xlsx"), creating /data if needed. Used to
+// mount user-uploaded files so run_python code can read them by path.
+// Best-effort: callers should log failures and continue.
+func (s *E2BExecutorService) PushFile(ctx context.Context, conversationID, targetPath string, content []byte) error {
+	url := fmt.Sprintf("%s/files/push", s.baseURL)
+	reqBody := map[string]interface{}{
+		"conversation_id": conversationID,
+		"target_path":     targetPath,
+		"content_b64":     base64.StdEncoding.EncodeToString(content),
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal push request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create push request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey := s.getAPIKey(); apiKey != "" {
+		req.Header.Set("X-E2B-API-Key", apiKey)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("push request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("push failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 func (s *E2BExecutorService) ExecuteAdvanced(ctx context.Context, req AdvancedExecuteRequest) (*AdvancedExecuteResponse, error) {
 	url := fmt.Sprintf("%s/execute-advanced", s.baseURL)
 

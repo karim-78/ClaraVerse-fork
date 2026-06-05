@@ -61,5 +61,13 @@ export function cleanLLMOutputLight(content: string): string {
   result = result.replace(/│/g, '|');
   result = result.replace(/┃/g, '|');
 
+  // Heal an unclosed code fence while streaming so the rest of the message
+  // doesn't render as raw markdown inside a half-open code block. If the count
+  // of ``` fences is odd, append a temporary closing fence.
+  const fenceCount = (result.match(/^```/gm) || []).length;
+  if (fenceCount % 2 === 1) {
+    result += '\n```';
+  }
+
   return result;
 }
